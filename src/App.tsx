@@ -25,6 +25,7 @@ import { Key, ShieldAlert } from 'lucide-react';
 const BOOKMARKS_STORAGE_KEY = 'torn_scouter_bookmarks';
 const NOTES_STORAGE_KEY = 'torn_scouter_notes';
 const HISTORY_STORAGE_KEY = 'sargus_attack_history';
+const ARCHIVE_STORAGE_KEY = 'sargus_archived_attack_history';
 
 export default function App() {
   const [apiKey, setApiKey] = useState<string>(getStoredApiKey());
@@ -67,8 +68,57 @@ export default function App() {
     }
   });
 
+  const [archivedHistory, setArchivedHistory] = useState<AttackHistoryItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(ARCHIVE_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [activeTab, setActiveTab] = useState<'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history'>('targets');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+
+  // Archive logs older than 30 days
+  const handleArchiveOldLogs = (): { count: number; message: string } => {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const active = attackHistory.filter((item) => item.timestamp >= cutoff);
+    const old = attackHistory.filter((item) => item.timestamp < cutoff);
+
+    if (old.length === 0) {
+      return { count: 0, message: 'No attack logs older than 30 days were found in your active view.' };
+    }
+
+    const updatedArchive = [...old, ...archivedHistory];
+    setAttackHistory(active);
+    setArchivedHistory(updatedArchive);
+
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(active));
+    localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(updatedArchive));
+
+    return {
+      count: old.length,
+      message: `Successfully archived ${old.length} attack log(s) older than 30 days into local archive storage.`,
+    };
+  };
+
+  // Restore archived logs back to active view
+  const handleRestoreArchivedLogs = () => {
+    if (archivedHistory.length === 0) return;
+    const restored = [...attackHistory, ...archivedHistory].sort((a, b) => b.timestamp - a.timestamp);
+    setAttackHistory(restored);
+    setArchivedHistory([]);
+
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(restored));
+    localStorage.removeItem(ARCHIVE_STORAGE_KEY);
+  };
+
+  // Clear archived logs permanently
+  const handleClearArchivedHistory = () => {
+    setArchivedHistory([]);
+    localStorage.removeItem(ARCHIVE_STORAGE_KEY);
+  };
 
   // Filter state defaulting to >= 30 days offline (1 month or more as requested)
   const [filters, setFilters] = useState<FilterOptions>({
@@ -82,6 +132,8 @@ export default function App() {
     sortOrder: 'desc',
     sourceCategory: 'ALL',
   });
+
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   // Fetch targets stored in server's persistent file database
   const fetchDbTargets = async () => {
@@ -123,11 +175,13 @@ export default function App() {
   // Load player profile & initialize targets
   const loadProfileAndTargets = async (key: string) => {
     try {
-      const { profile, battleStats } = await fetchSelfProfile(key);
+      const { profile, battleStats, error } = await fetchSelfProfile(key);
       setPlayerProfile(profile);
       setPlayerStats(battleStats);
+      setProfileError(error || null);
 
-      const initialTargets = loadInitialTargets(battleStats);
+      const defaultStats = battleStats || { strength: 15000, defense: 15000, speed: 15000, dexterity: 15000, total: 60000 };
+      const initialTargets = loadInitialTargets(defaultStats);
       setTargets(initialTargets);
       fetchDbTargets();
     } catch (err) {
@@ -230,6 +284,7 @@ export default function App() {
         estimatedFFMultiplier: targetObj.ffScouter.estimatedFFMultiplier,
         attackUrl: targetObj.attackUrl,
         timestamp: Date.now(),
+        result: 'PENDING',
       };
 
       setAttackHistory((prev) => {
@@ -246,12 +301,24 @@ export default function App() {
     );
   };
 
+  // Update Attack History result outcome (Success / Failure / Pending)
+  const handleUpdateAttackResult = (id: string, result: 'SUCCESS' | 'FAILURE' | 'PENDING') => {
+    setAttackHistory((prev) => {
+      const updated = prev.map((item) =>
+        item.id === id ? { ...item, result } : item
+      );
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
   // Handle re-attacking from History tab
   const handleAttackAgainFromHistory = (item: AttackHistoryItem) => {
     const newEntry: AttackHistoryItem = {
       ...item,
       id: `${item.targetId}_${Date.now()}`,
       timestamp: Date.now(),
+      result: 'PENDING',
     };
     setAttackHistory((prev) => {
       const updated = [newEntry, ...prev];
@@ -373,7 +440,12 @@ export default function App() {
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {/* Authenticated Player Overview Card */}
-          <PlayerProfileCard profile={playerProfile} battleStats={playerStats} />
+          <PlayerProfileCard
+            profile={playerProfile}
+            battleStats={playerStats}
+            profileError={profileError}
+            onOpenKeyModal={() => setIsKeyModalOpen(true)}
+          />
 
           {/* Auto-Crawler Control Bar */}
           <AutoCrawlerWidget apiKey={apiKey} onDbTargetsUpdated={fetchDbTargets} />
@@ -458,9 +530,14 @@ export default function App() {
           {activeTab === 'history' && (
             <AttackHistoryTab
               history={attackHistory}
+              archivedHistory={archivedHistory}
               onClearHistory={handleClearHistory}
               onRemoveItem={handleRemoveHistoryItem}
               onAttackAgain={handleAttackAgainFromHistory}
+              onUpdateResult={handleUpdateAttackResult}
+              onArchiveOldLogs={handleArchiveOldLogs}
+              onRestoreArchived={handleRestoreArchivedLogs}
+              onClearArchived={handleClearArchivedHistory}
             />
           )}
         </main>

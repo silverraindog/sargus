@@ -91,6 +91,7 @@ export interface AttackHistoryItem {
   estimatedFFMultiplier: number;
   attackUrl: string;
   timestamp: number;
+  result?: 'SUCCESS' | 'FAILURE' | 'PENDING';
 }
 
 export interface FilterOptions {

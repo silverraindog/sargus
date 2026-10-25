@@ -20,57 +20,47 @@ export function clearStoredApiKey(): void {
 }
 
 /**
- * Fetches the authenticated user's profile and battle stats using their own API key.
+ * Fetches the authenticated user's profile and battle stats using their official Torn API key.
  */
-export async function fetchSelfProfile(apiKey: string): Promise<{ profile: PlayerProfile; battleStats: BattleStats }> {
-  if (!apiKey) {
-    const fallbackStats: BattleStats = {
-      strength: 15000,
-      defense: 15000,
-      speed: 15000,
-      dexterity: 15000,
-      total: 60000,
-    };
+export async function fetchSelfProfile(apiKey: string): Promise<{ profile: PlayerProfile | null; battleStats: BattleStats | null; error?: string }> {
+  if (!apiKey || !apiKey.trim()) {
     return {
-      profile: {
-        player_id: 0,
-        name: 'Guest Player',
-        level: 1,
-        age: 1,
-        rank: 'Unauthenticated',
-        last_action: { status: 'Offline', timestamp: Math.floor(Date.now() / 1000), relative: 'Offline' },
-        status: { description: 'API Key Required', details: '', state: 'Okay', until: 0 },
-        battleStats: fallbackStats,
-      },
-      battleStats: fallbackStats,
+      profile: null,
+      battleStats: null,
+      error: 'No API Key set. Please enter your Torn API Key to fetch your live player name, level, and battle stats.',
     };
   }
 
   try {
-    const res = await fetch(`/api/torn/user?key=${encodeURIComponent(apiKey)}`);
+    const res = await fetch(`/api/torn/user?key=${encodeURIComponent(apiKey.trim())}`);
     const data = await res.json();
 
     if (data.error) {
-      throw new Error(data.error || 'Failed to fetch player stats');
+      const msg = typeof data.error === 'string' ? data.error : (data.error.error || 'Invalid API Key or Torn API Error');
+      return {
+        profile: null,
+        battleStats: null,
+        error: msg,
+      };
     }
 
     const battleStats: BattleStats = {
-      strength: data.strength || 12500,
-      defense: data.defense || 12500,
-      speed: data.speed || 12500,
-      dexterity: data.dexterity || 12500,
-      total: (data.strength || 12500) + (data.defense || 12500) + (data.speed || 12500) + (data.dexterity || 12500),
+      strength: data.strength || 15000,
+      defense: data.defense || 15000,
+      speed: data.speed || 15000,
+      dexterity: data.dexterity || 15000,
+      total: (data.strength || 15000) + (data.defense || 15000) + (data.speed || 15000) + (data.dexterity || 15000),
     };
 
     const profile: PlayerProfile = {
-      player_id: data.player_id || 100000,
-      name: data.name || 'Commander',
-      level: data.level || 25,
-      gender: data.gender || 'Male',
-      age: data.age || 450,
-      rank: data.rank || 'Agent',
+      player_id: data.player_id || 0,
+      name: data.name || (data.player_id ? `TornUser_${data.player_id}` : 'Torn Player'),
+      level: data.level || 1,
+      gender: data.gender || 'Unknown',
+      age: data.age || 1,
+      rank: data.rank || 'Citizen',
       faction: data.faction,
-      last_action: data.last_action || { status: 'Online', timestamp: Math.floor(Date.now() / 1000), relative: 'Just now' },
+      last_action: data.last_action || { status: 'Online', timestamp: Math.floor(Date.now() / 1000), relative: 'Online' },
       status: data.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
       battleStats,
       personalstats: data.personalstats,
@@ -79,25 +69,10 @@ export async function fetchSelfProfile(apiKey: string): Promise<{ profile: Playe
     return { profile, battleStats };
   } catch (err: any) {
     console.warn('API Key validation error:', err.message);
-    const fallbackStats: BattleStats = {
-      strength: 15000,
-      defense: 15000,
-      speed: 15000,
-      dexterity: 15000,
-      total: 60000,
-    };
     return {
-      profile: {
-        player_id: 182000,
-        name: 'Scout_Agent',
-        level: 30,
-        age: 600,
-        rank: 'High Operative',
-        last_action: { status: 'Online', timestamp: Math.floor(Date.now() / 1000), relative: 'Online' },
-        status: { description: 'Okay', details: '', state: 'Okay', until: 0 },
-        battleStats: fallbackStats,
-      },
-      battleStats: fallbackStats,
+      profile: null,
+      battleStats: null,
+      error: err.message || 'Failed to connect to Torn API. Please check your key.',
     };
   }
 }

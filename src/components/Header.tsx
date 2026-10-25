@@ -115,7 +115,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Zone 3: Single Primary Action / API Key Status */}
         <div className="flex items-center gap-3 shrink-0">
-          {playerProfile && playerStats && (
+          {playerProfile && playerStats ? (
             <div className="hidden lg:flex items-center gap-3 px-3 py-1 rounded-md bg-slate-900/80 border border-slate-800 text-xs text-slate-300 font-mono">
               <div>
                 <span className="text-slate-500">PLAYER:</span>{' '}
@@ -127,6 +127,11 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="text-slate-500">BS:</span>{' '}
                 <span className="text-emerald-400 font-bold">{formatStatNumber(playerStats.total)}</span>
               </div>
+            </div>
+          ) : (
+            <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-md bg-slate-900/50 border border-slate-800 text-xs text-slate-400 font-mono">
+              <span className="text-slate-500">PLAYER:</span>
+              <span className="text-amber-400 font-semibold">Not Connected</span>
             </div>
           )}
 

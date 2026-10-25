@@ -1,21 +1,59 @@
 import React from 'react';
-import { Shield, Zap, Flame, Award, Heart, Activity } from 'lucide-react';
+import { Shield, Zap, Flame, Award, Heart, Activity, Key, AlertTriangle } from 'lucide-react';
 import { PlayerProfile, BattleStats } from '../types/torn';
 import { formatStatNumber } from '../utils/ffscouter';
 
 interface PlayerProfileCardProps {
   profile: PlayerProfile | null;
   battleStats: BattleStats | null;
+  profileError?: string | null;
+  onOpenKeyModal?: () => void;
 }
 
-export const PlayerProfileCard: React.FC<PlayerProfileCardProps> = ({ profile, battleStats }) => {
-  if (!profile || !battleStats) return null;
+export const PlayerProfileCard: React.FC<PlayerProfileCardProps> = ({
+  profile,
+  battleStats,
+  profileError,
+  onOpenKeyModal,
+}) => {
+  if (!profile || !battleStats) {
+    return (
+      <div className="bg-slate-900/90 border border-amber-500/30 rounded-xl p-5 shadow-xl text-slate-100 mb-6 flex flex-col sm:flex-row items-center justify-between gap-4 font-mono">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center font-bold text-amber-400 shrink-0">
+            <Key className="w-6 h-6 animate-pulse" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              Torn Profile Not Connected
+              <span className="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                SETUP REQUIRED
+              </span>
+            </h3>
+            <p className="text-xs text-slate-400 font-sans mt-0.5">
+              {profileError ||
+                'Enter your official Torn API key to load your live player name, level, rank, and battle stats for accurate target difficulty estimates.'}
+            </p>
+          </div>
+        </div>
+        {onOpenKeyModal && (
+          <button
+            onClick={onOpenKeyModal}
+            className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-red-600 hover:from-amber-400 hover:to-red-500 text-slate-950 font-extrabold text-xs uppercase tracking-wider shrink-0 transition-all shadow-md shadow-amber-950/50 flex items-center gap-1.5"
+          >
+            <Key className="w-3.5 h-3.5" />
+            <span>Configure Key</span>
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl text-slate-100 mb-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-red-600 to-amber-700 flex items-center justify-center font-bold text-lg text-white border border-red-500/30 shadow-lg">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-red-600 to-amber-700 flex items-center justify-center font-bold text-lg text-white border border-red-500/30 shadow-lg shrink-0">
             {profile.level}
           </div>
           <div>
@@ -95,3 +133,4 @@ export const PlayerProfileCard: React.FC<PlayerProfileCardProps> = ({ profile, b
     </div>
   );
 };
+
