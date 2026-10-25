@@ -50,8 +50,8 @@
 # Pull published Docker image from GHCR
 docker pull ghcr.io/YOUR_GITHUB_USERNAME/sargus:latest
 
-# Run container on port 3000
-docker run -d -p 3000:3000 --name sargus ghcr.io/YOUR_GITHUB_USERNAME/sargus:latest
+# Run container with persistent data volume mount
+docker run -d -p 3000:3000 -v $(pwd)/data:/app/data --name sargus ghcr.io/YOUR_GITHUB_USERNAME/sargus:latest
 ```
 
 ### Build and Run locally with Docker Compose

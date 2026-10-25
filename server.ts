@@ -12,8 +12,14 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+// Ensure persistent data directory exists
+const DATA_DIR = path.resolve('data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
 // File path for persistent target database
-const DB_FILE_PATH = path.resolve('discovered_targets.json');
+const DB_FILE_PATH = path.join(DATA_DIR, 'discovered_targets.json');
 
 interface TargetEntry {
   player_id: number;
@@ -217,7 +223,11 @@ app.get('/api/torn/user', async (req, res) => {
     const data = await response.json();
 
     if (data.error) {
-      return res.status(400).json({ error: data.error.error || 'Torn API Error', code: data.error.code });
+      const isNotFound = data.error.code === 6 || (data.error.error && data.error.error.includes('No user found'));
+      const friendlyMsg = isNotFound
+        ? 'User ID not found in Torn City. Please verify the User ID and try again.'
+        : (data.error.error || 'Torn API Error');
+      return res.status(400).json({ error: friendlyMsg, code: data.error.code });
     }
 
     setCache(cacheKey, data);
