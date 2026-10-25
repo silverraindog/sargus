@@ -32,7 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div>
             <a href="#" className="text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0 hover:text-red-400 transition-colors">
-              TORN <span className="text-red-500">SCOUTER</span>
+              SARGUS <span className="text-red-500">SCOUTER</span>
             </a>
             <p className="text-[10px] text-slate-400 -mt-1 font-mono tracking-wider">INACTIVE TARGET FINDER</p>
           </div>

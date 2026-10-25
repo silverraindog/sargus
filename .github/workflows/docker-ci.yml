@@ -27,7 +27,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
-          tags: torn-scouter:latest, torn-scouter:${{ github.sha }}
+          tags: sargus:latest, sargus:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

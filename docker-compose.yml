@@ -1,9 +1,9 @@
 services:
-  torn-scouter:
+  sargus:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: torn-scouter-app
+    container_name: sargus-app
     restart: unless-stopped
     ports:
       - "3000:3000"

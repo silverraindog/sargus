@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for Torn Scouter
+# Multi-stage Dockerfile for Sargus
 
 # Stage 1: Build static frontend assets and prepare application
 FROM node:20-alpine AS builder
@@ -8,8 +8,8 @@ WORKDIR /app
 # Copy dependency manifests
 COPY package*.json ./
 
-# Install all dependencies (including devDependencies for Vite & TypeScript build)
-RUN npm ci
+# Install dependencies (use npm install so build succeeds with or without package-lock.json)
+RUN npm install
 
 # Copy source code
 COPY . .
@@ -25,9 +25,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Copy package manifests and install dependencies
+# Copy package manifests and install runtime dependencies
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 
 # Copy built frontend assets from builder stage
 COPY --from=builder /app/dist ./dist
