@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   History,
   Swords,
@@ -23,7 +23,20 @@ import {
   X,
   Check,
   AlertCircle,
+  Search,
+  Filter,
+  Calendar,
+  RotateCcw,
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from 'recharts';
 import { AttackHistoryItem } from '../types/torn';
 import { formatStatNumber, getDifficultyBadgeStyle } from '../utils/ffscouter';
 
@@ -39,6 +52,44 @@ interface AttackHistoryTabProps {
   onClearArchived: () => void;
 }
 
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    const wins = payload.find((p: any) => p.dataKey === 'wins')?.value || 0;
+    const losses = payload.find((p: any) => p.dataKey === 'losses')?.value || 0;
+    const pending = payload.find((p: any) => p.dataKey === 'pending')?.value || 0;
+    const total = wins + losses + pending;
+    const rate = wins + losses > 0 ? ((wins / (wins + losses)) * 100).toFixed(0) : '0';
+
+    return (
+      <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-2xl font-mono text-xs space-y-1.5 min-w-[150px]">
+        <div className="font-bold text-white border-b border-slate-800 pb-1 flex items-center justify-between">
+          <span>Date: {label}</span>
+          <span className="text-amber-400 font-bold">{rate}% Win</span>
+        </div>
+        <div className="text-emerald-400 flex items-center justify-between">
+          <span>Success (Wins):</span>
+          <span className="font-bold">{wins}</span>
+        </div>
+        <div className="text-rose-400 flex items-center justify-between">
+          <span>Failures (Losses):</span>
+          <span className="font-bold">{losses}</span>
+        </div>
+        {pending > 0 && (
+          <div className="text-slate-400 flex items-center justify-between">
+            <span>Pending:</span>
+            <span className="font-bold">{pending}</span>
+          </div>
+        )}
+        <div className="text-slate-500 pt-1 border-t border-slate-800/80 text-[10px] flex items-center justify-between">
+          <span>Total Raids:</span>
+          <span>{total}</span>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
   history,
   archivedHistory,
@@ -52,6 +103,47 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
 }) => {
   const [showArchiveModal, setShowArchiveModal] = useState<boolean>(false);
   const [archiveBannerMsg, setArchiveBannerMsg] = useState<string | null>(null);
+
+  // Search & Filter State
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [resultFilter, setResultFilter] = useState<'ALL' | 'SUCCESS' | 'FAILURE' | 'PENDING'>('ALL');
+  const [dateRangeFilter, setDateRangeFilter] = useState<'ALL' | '24H' | '7D' | '30D' | '90D'>('ALL');
+
+  // Filtered History calculation
+  const filteredHistory = useMemo(() => {
+    return history.filter((item) => {
+      // 1. Search Query Filter (target name, target ID, faction name)
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const nameMatch = item.targetName.toLowerCase().includes(q);
+        const idMatch = item.targetId.toString().includes(q);
+        const factionMatch = item.factionName ? item.factionName.toLowerCase().includes(q) : false;
+        if (!nameMatch && !idMatch && !factionMatch) return false;
+      }
+
+      // 2. Result Outcome Filter
+      if (resultFilter !== 'ALL') {
+        const itemResult = item.result || 'PENDING';
+        if (itemResult !== resultFilter) return false;
+      }
+
+      // 3. Date Range Filter
+      if (dateRangeFilter !== 'ALL') {
+        const now = Date.now();
+        let maxAgeMs = 0;
+        if (dateRangeFilter === '24H') maxAgeMs = 24 * 60 * 60 * 1000;
+        else if (dateRangeFilter === '7D') maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+        else if (dateRangeFilter === '30D') maxAgeMs = 30 * 24 * 60 * 60 * 1000;
+        else if (dateRangeFilter === '90D') maxAgeMs = 90 * 24 * 60 * 60 * 1000;
+
+        if (now - item.timestamp > maxAgeMs) return false;
+      }
+
+      return true;
+    });
+  }, [history, searchQuery, resultFilter, dateRangeFilter]);
+
+  const hasActiveFilters = searchQuery.trim() !== '' || resultFilter !== 'ALL' || dateRangeFilter !== 'ALL';
 
   const formatTimeAgo = (timestamp: number): string => {
     const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -73,9 +165,55 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
   const winRateNum = markedCount > 0 ? (wins / markedCount) * 100 : 0;
   const winRate = winRateNum.toFixed(1);
 
+  // All-Time Combined Metrics (Active + Archived)
+  const allTimeCombined = useMemo(() => {
+    const combined = [...history, ...archivedHistory];
+    const total = combined.length;
+    const wins = combined.filter((h) => h.result === 'SUCCESS').length;
+    const losses = combined.filter((h) => h.result === 'FAILURE').length;
+    const pending = combined.filter((h) => !h.result || h.result === 'PENDING').length;
+    const marked = wins + losses;
+    const winRate = marked > 0 ? ((wins / marked) * 100).toFixed(1) : '0.0';
+    const winRateNum = marked > 0 ? (wins / marked) * 100 : 0;
+    return { total, wins, losses, pending, marked, winRate, winRateNum };
+  }, [history, archivedHistory]);
+
   // Cutoff for 30 days
   const cutoff30d = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const eligibleToArchiveCount = history.filter((h) => h.timestamp < cutoff30d).length;
+
+  // Trend Data Calculation for Recharts Bar Chart
+  const trendData = useMemo(() => {
+    if (history.length === 0) return [];
+
+    const map = new Map<string, { dateKey: string; label: string; timestamp: number; wins: number; losses: number; pending: number }>();
+
+    history.forEach((item) => {
+      const d = new Date(item.timestamp);
+      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const label = `${d.getMonth() + 1}/${d.getDate()}`;
+
+      if (!map.has(dateKey)) {
+        map.set(dateKey, {
+          dateKey,
+          label,
+          timestamp: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(),
+          wins: 0,
+          losses: 0,
+          pending: 0,
+        });
+      }
+
+      const entry = map.get(dateKey)!;
+      if (item.result === 'SUCCESS') entry.wins += 1;
+      else if (item.result === 'FAILURE') entry.losses += 1;
+      else entry.pending += 1;
+    });
+
+    return Array.from(map.values())
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-14);
+  }, [history]);
 
   // Difficulty Breakdown
   const difficultyTypes = [
@@ -176,6 +314,105 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Top All-Time Win/Loss Summary Quick Overview Card */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border border-slate-800/90 rounded-2xl p-5 shadow-2xl space-y-4 font-mono">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 shrink-0">
+              <Trophy className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-white flex items-center gap-2 tracking-wide uppercase">
+                All-Time Win / Loss Summary
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  GLOBAL OVERVIEW
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400 font-sans">
+                Total record of successful vs failed attacks across active logs and stored archives
+              </p>
+            </div>
+          </div>
+
+          <div className="text-xs text-slate-400 bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800/80 flex items-center gap-2">
+            <span className="text-slate-500">Recorded Raids:</span>
+            <span className="text-white font-bold">{allTimeCombined.total} total</span>
+            <span className="text-slate-600">({history.length} active · {archivedHistory.length} archived)</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+          {/* All-Time Win Rate % */}
+          <div className="bg-slate-950/90 p-4 rounded-xl border border-emerald-500/30 flex flex-col justify-between shadow-lg">
+            <div className="text-slate-400 text-xs uppercase font-bold flex items-center justify-between">
+              <span>All-Time Win Rate</span>
+              <Percent className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-3xl font-extrabold text-white mt-2 tracking-tight">
+              {allTimeCombined.winRate}%
+            </div>
+            {/* Visual ratio bar */}
+            <div className="mt-3 space-y-1">
+              <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden flex">
+                <div
+                  className="bg-emerald-500 h-full rounded-l-full transition-all"
+                  style={{ width: `${allTimeCombined.winRateNum}%` }}
+                />
+                <div
+                  className="bg-rose-500 h-full rounded-r-full transition-all"
+                  style={{ width: `${100 - allTimeCombined.winRateNum}%` }}
+                />
+              </div>
+              <div className="text-[10px] text-slate-500 flex justify-between">
+                <span>{allTimeCombined.wins} Wins</span>
+                <span>{allTimeCombined.losses} Losses</span>
+              </div>
+            </div>
+          </div>
+
+          {/* All-Time Wins Count */}
+          <div className="bg-slate-950/90 p-4 rounded-xl border border-emerald-500/20 flex flex-col justify-between shadow-lg">
+            <div className="text-slate-400 text-xs uppercase font-bold flex items-center justify-between">
+              <span>Successful Attacks</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-3xl font-extrabold text-emerald-400 mt-2">
+              {allTimeCombined.wins} <span className="text-xs font-normal text-slate-400">Wins</span>
+            </div>
+            <div className="text-[11px] text-slate-400 mt-2">
+              {allTimeCombined.marked > 0 ? ((allTimeCombined.wins / allTimeCombined.marked) * 100).toFixed(0) : 0}% of marked outcome raids
+            </div>
+          </div>
+
+          {/* All-Time Losses Count */}
+          <div className="bg-slate-950/90 p-4 rounded-xl border border-rose-500/20 flex flex-col justify-between shadow-lg">
+            <div className="text-slate-400 text-xs uppercase font-bold flex items-center justify-between">
+              <span>Failed Attacks</span>
+              <XCircle className="w-4 h-4 text-rose-400" />
+            </div>
+            <div className="text-3xl font-extrabold text-rose-400 mt-2">
+              {allTimeCombined.losses} <span className="text-xs font-normal text-slate-400">Defeats</span>
+            </div>
+            <div className="text-[11px] text-slate-400 mt-2">
+              {allTimeCombined.marked > 0 ? ((allTimeCombined.losses / allTimeCombined.marked) * 100).toFixed(0) : 0}% of marked outcome raids
+            </div>
+          </div>
+
+          {/* Unmarked / Pending & Ratio summary */}
+          <div className="bg-slate-950/90 p-4 rounded-xl border border-slate-800 flex flex-col justify-between shadow-lg">
+            <div className="text-slate-400 text-xs uppercase font-bold flex items-center justify-between">
+              <span>Outcome Tracking Status</span>
+              <HelpCircle className="w-4 h-4 text-amber-400" />
+            </div>
+            <div className="text-3xl font-extrabold text-white mt-2">
+              {allTimeCombined.marked} <span className="text-xs font-normal text-slate-400">/ {allTimeCombined.total}</span>
+            </div>
+            <div className="text-[11px] text-amber-400/90 font-bold mt-2">
+              {allTimeCombined.pending > 0 ? `${allTimeCombined.pending} pending outcome result(s)` : 'All raids marked!'}
+            </div>
+          </div>
+        </div>
+      </div>
       {/* Toast Banner for Archive Actions */}
       {archiveBannerMsg && (
         <div className="bg-slate-900 border border-amber-500/40 p-4 rounded-xl text-amber-200 text-xs font-mono flex items-center justify-between shadow-xl animate-fade-in">
@@ -328,6 +565,53 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
           </div>
         </div>
 
+        {/* Success vs Failure Trend Bar Chart */}
+        <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 space-y-3 font-mono">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+            <div>
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                <BarChart3 className="w-4 h-4 text-emerald-400" />
+                Raid Outcome Trend Over Time
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Visual comparison of Success (Wins) vs Failure (Losses) across raid dates
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 text-[11px] text-slate-400 font-sans">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block" /> Success (Wins)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded bg-rose-500 inline-block" /> Failures (Losses)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded bg-slate-600 inline-block" /> Pending
+              </span>
+            </div>
+          </div>
+
+          <div className="h-56 w-full pt-2">
+            {trendData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <XAxis dataKey="label" stroke="#64748b" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={11} tickLine={false} allowDecimals={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="wins" name="Success" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                  <Bar dataKey="losses" name="Failure" fill="#f43f5e" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                  <Bar dataKey="pending" name="Pending" fill="#475569" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-slate-500 text-xs">
+                No raid trend data recorded yet. Log raids and mark outcomes to view trend chart.
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Win-Rate Breakdown by Difficulty Category */}
         <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80 space-y-3 font-mono">
           <div className="flex items-center justify-between text-xs font-bold text-slate-300 uppercase tracking-wider">
@@ -434,10 +718,105 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
           </div>
         </div>
 
+        {/* Search & Filter Controls Bar */}
+        <div className="p-3 bg-slate-950/70 border-b border-slate-800/80 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 font-mono">
+          <div className="flex-1 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            {/* Search Input */}
+            <div className="relative flex-1">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search target name, ID, or faction..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-red-500/50 transition-colors"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Result Filter Select */}
+            <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1">
+              <Filter className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="text-[11px] text-slate-500 uppercase font-bold shrink-0">Outcome:</span>
+              <select
+                value={resultFilter}
+                onChange={(e: any) => setResultFilter(e.target.value)}
+                className="bg-transparent text-xs text-slate-200 font-bold focus:outline-none cursor-pointer"
+              >
+                <option value="ALL" className="bg-slate-900 text-slate-200">All Results</option>
+                <option value="SUCCESS" className="bg-slate-900 text-emerald-400">Wins Only (Success)</option>
+                <option value="FAILURE" className="bg-slate-900 text-rose-400">Losses Only (Failures)</option>
+                <option value="PENDING" className="bg-slate-900 text-slate-400">Pending / Unmarked</option>
+              </select>
+            </div>
+
+            {/* Date Range Select */}
+            <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1">
+              <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="text-[11px] text-slate-500 uppercase font-bold shrink-0">Timeframe:</span>
+              <select
+                value={dateRangeFilter}
+                onChange={(e: any) => setDateRangeFilter(e.target.value)}
+                className="bg-transparent text-xs text-slate-200 font-bold focus:outline-none cursor-pointer"
+              >
+                <option value="ALL" className="bg-slate-900 text-slate-200">All Time</option>
+                <option value="24H" className="bg-slate-900 text-slate-200">Last 24 Hours</option>
+                <option value="7D" className="bg-slate-900 text-slate-200">Last 7 Days</option>
+                <option value="30D" className="bg-slate-900 text-slate-200">Last 30 Days</option>
+                <option value="90D" className="bg-slate-900 text-slate-200">Last 90 Days</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between md:justify-end gap-3 shrink-0">
+            <span className="text-[11px] text-slate-400">
+              Showing <strong className="text-white">{filteredHistory.length}</strong> of {history.length} active logs
+            </span>
+
+            {hasActiveFilters && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  setResultFilter('ALL');
+                  setDateRangeFilter('ALL');
+                }}
+                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 font-bold flex items-center gap-1 transition-colors"
+              >
+                <RotateCcw className="w-3 h-3 text-amber-400" /> Reset
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Table View */}
         {history.length === 0 ? (
           <div className="p-8 text-center text-slate-400 font-mono text-xs">
             All active attack logs have been archived or cleared. Click <strong>Archived Vault</strong> to view stored historical records.
+          </div>
+        ) : filteredHistory.length === 0 ? (
+          <div className="p-12 text-center text-slate-400 font-mono text-xs space-y-2">
+            <Search className="w-8 h-8 text-slate-600 mx-auto" />
+            <div className="text-slate-200 font-bold">No Attack Logs Match Your Filters</div>
+            <p className="text-slate-500 max-w-sm mx-auto text-[11px]">
+              Try clearing search terms or selecting 'All Results' / 'All Time' timeframe.
+            </p>
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setResultFilter('ALL');
+                setDateRangeFilter('ALL');
+              }}
+              className="mt-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-amber-400 font-bold inline-flex items-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" /> Clear All Filters
+            </button>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -453,7 +832,7 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {history.map((item) => {
+                {filteredHistory.map((item) => {
                   const diffStyle = getDifficultyBadgeStyle(item.difficulty);
                   const currentResult = item.result || 'PENDING';
 

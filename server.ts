@@ -85,68 +85,185 @@ function setCache(key: string, data: any) {
   apiCache.set(key, { data, timestamp: Date.now() });
 }
 
-// Background Crawler State (Runs every 1m 30s)
-let crawlerEnabled = false;
-let crawlerApiKey = '';
-let crawlerCurrentId = 180000;
-let crawlerBatchSize = 20;
-let crawlerIntervalMs = 90 * 1000; // 1 minute 30 seconds
-let crawlerLastRun = 0;
-let crawlerNextRun = 0;
+// File path for crawler state persistence
+const CRAWLER_CONFIG_PATH = path.join(DATA_DIR, 'crawler_config.json');
+
+interface CrawlerConfig {
+  enabled: boolean;
+  apiKey: string;
+  currentId: number;
+  batchSize: number;
+  intervalMs: number;
+  lastRun: number;
+  nextRun: number;
+  lastStatusMessage: string;
+  lastError: string;
+}
+
+function readCrawlerConfig(): CrawlerConfig {
+  try {
+    if (fs.existsSync(CRAWLER_CONFIG_PATH)) {
+      const content = fs.readFileSync(CRAWLER_CONFIG_PATH, 'utf-8');
+      return JSON.parse(content);
+    }
+  } catch (e) {
+    console.error('Failed to read crawler config:', e);
+  }
+  return {
+    enabled: false,
+    apiKey: '',
+    currentId: 180000,
+    batchSize: 20,
+    intervalMs: 90000,
+    lastRun: 0,
+    nextRun: 0,
+    lastStatusMessage: 'Crawler initialized',
+    lastError: '',
+  };
+}
+
+function saveCrawlerConfig(cfg: Partial<CrawlerConfig>) {
+  try {
+    const current = readCrawlerConfig();
+    const updated = { ...current, ...cfg };
+    fs.writeFileSync(CRAWLER_CONFIG_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to save crawler config:', e);
+  }
+}
+
+// Background Crawler State
+const initialCrawlerConfig = readCrawlerConfig();
+let crawlerEnabled = initialCrawlerConfig.enabled ?? false;
+let crawlerApiKey = initialCrawlerConfig.apiKey || '';
+let crawlerCurrentId = initialCrawlerConfig.currentId || 180000;
+let crawlerBatchSize = initialCrawlerConfig.batchSize || 20;
+let crawlerIntervalMs = initialCrawlerConfig.intervalMs || 90 * 1000; // 90 seconds
+let crawlerLastRun = initialCrawlerConfig.lastRun || 0;
+let crawlerNextRun = initialCrawlerConfig.nextRun || 0;
+let crawlerLastStatusMessage = initialCrawlerConfig.lastStatusMessage || 'Idle';
+let crawlerLastError = initialCrawlerConfig.lastError || '';
+let crawlerIsScanning = false;
 let crawlerTimer: NodeJS.Timeout | null = null;
 
 // Function that executes one auto-scan cycle
-async function executeCrawlerCycle() {
-  if (!crawlerEnabled || !crawlerApiKey) return;
+async function executeCrawlerCycle(overrideApiKey?: string) {
+  if (crawlerIsScanning) return;
 
-  console.log(`[Auto-Crawler] Running cycle... User IDs ${crawlerCurrentId} to ${crawlerCurrentId + crawlerBatchSize}`);
+  const activeKey = overrideApiKey || crawlerApiKey;
+  if (!activeKey) {
+    crawlerLastStatusMessage = 'Waiting for Torn API Key...';
+    console.log('[Auto-Crawler] Skipped cycle: No Torn API Key provided.');
+    return;
+  }
+
+  // Sync key if new override key provided
+  if (overrideApiKey && overrideApiKey !== crawlerApiKey) {
+    crawlerApiKey = overrideApiKey;
+  }
+
+  crawlerIsScanning = true;
   crawlerLastRun = Date.now();
   crawlerNextRun = Date.now() + crawlerIntervalMs;
+  crawlerLastError = '';
+
+  const startId = crawlerCurrentId;
+  const endId = startId + crawlerBatchSize - 1;
+  crawlerLastStatusMessage = `Scanning User IDs #${startId} to #${endId}...`;
+  console.log(`[Auto-Crawler] Running cycle... User IDs #${startId} to #${endId}`);
 
   const currentDb = readDbTargets();
   const existingMap = new Map<number, boolean>(currentDb.map((t) => [t.player_id, true]));
   let newFoundCount = 0;
 
-  for (let i = 0; i < crawlerBatchSize; i++) {
-    const pid = crawlerCurrentId + i;
-    try {
-      const res = await fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${crawlerApiKey}`);
-      const data = await res.json();
+  try {
+    // Process in 4 batches of 5 concurrent requests to stay within rate limits and speed up execution
+    const chunkSize = 5;
+    for (let batchStart = 0; batchStart < crawlerBatchSize; batchStart += chunkSize) {
+      const promises = [];
+      for (let offset = 0; offset < chunkSize && (batchStart + offset) < crawlerBatchSize; offset++) {
+        const pid = startId + batchStart + offset;
+        promises.push(
+          fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${activeKey}`)
+            .then(res => res.json())
+            .then(data => ({ pid, data }))
+            .catch(err => ({ pid, error: err }))
+        );
+      }
 
-      if (data && !data.error && data.player_id) {
-        const rel = data.last_action?.relative || '';
-        const isOffline = data.last_action?.status === 'Offline' || rel.includes('month') || rel.includes('year') || parseInt(rel, 10) >= 30;
+      const results = await Promise.all(promises);
 
-        if (isOffline && !existingMap.has(data.player_id)) {
-          const entry: TargetEntry = {
-            player_id: data.player_id,
-            name: data.name || `User_${data.player_id}`,
-            level: data.level || 1,
-            gender: data.gender || 'Male',
-            age: data.age || 100,
-            rank: data.rank || 'Civilian',
-            last_action: data.last_action || { status: 'Offline', timestamp: 0, relative: '30+ days ago' },
-            status: data.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
-            personalstats: data.personalstats,
-            discoveredTimestamp: Date.now(),
-          };
+      for (const item of results) {
+        if ('error' in item && item.error) {
+          continue;
+        }
 
-          currentDb.push(entry);
-          existingMap.set(data.player_id, true);
-          newFoundCount++;
+        const data = (item as any).data;
+        if (!data) continue;
+
+        if (data.error) {
+          crawlerLastError = data.error.error || `Torn API Error Code ${data.error.code}`;
+          console.warn(`[Auto-Crawler] Torn API Error on ID #${item.pid}:`, crawlerLastError);
+          continue;
+        }
+
+        if (data.player_id) {
+          const rel = data.last_action?.relative || '';
+          const isOffline =
+            data.last_action?.status === 'Offline' ||
+            rel.includes('month') ||
+            rel.includes('year') ||
+            parseInt(rel, 10) >= 30;
+
+          if (isOffline && !existingMap.has(data.player_id)) {
+            const entry: TargetEntry = {
+              player_id: data.player_id,
+              name: data.name || `User_${data.player_id}`,
+              level: data.level || 1,
+              gender: data.gender || 'Male',
+              age: data.age || 100,
+              rank: data.rank || 'Civilian',
+              last_action: data.last_action || { status: 'Offline', timestamp: 0, relative: '30+ days ago' },
+              status: data.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
+              personalstats: data.personalstats,
+              discoveredTimestamp: Date.now(),
+            };
+
+            currentDb.push(entry);
+            existingMap.set(data.player_id, true);
+            newFoundCount++;
+          }
         }
       }
-    } catch (e) {
-      // Ignore individual fetch errors
+
+      // Small delay between chunk batches
+      await new Promise(resolve => setTimeout(resolve, 150));
     }
-  }
 
-  if (newFoundCount > 0) {
-    writeDbTargets(currentDb);
-    console.log(`[Auto-Crawler] Added ${newFoundCount} new inactive targets into DB. Total in DB: ${currentDb.length}`);
-  }
+    if (newFoundCount > 0) {
+      writeDbTargets(currentDb);
+      console.log(`[Auto-Crawler] Added ${newFoundCount} new inactive targets. Total in DB: ${currentDb.length}`);
+    }
 
-  crawlerCurrentId += crawlerBatchSize;
+    crawlerLastStatusMessage = `Scanned #${startId}-#${endId}: ${newFoundCount > 0 ? `+${newFoundCount} new targets!` : 'No new inactive targets'}`;
+  } catch (err: any) {
+    console.error('[Auto-Crawler] Execution cycle error:', err);
+    crawlerLastError = err?.message || 'Crawler execution error';
+  } finally {
+    // ALWAYS advance ID range after scan attempt so crawler doesn't freeze on one range
+    crawlerCurrentId += crawlerBatchSize;
+    crawlerIsScanning = false;
+
+    saveCrawlerConfig({
+      enabled: crawlerEnabled,
+      apiKey: crawlerApiKey,
+      currentId: crawlerCurrentId,
+      lastRun: crawlerLastRun,
+      nextRun: crawlerNextRun,
+      lastStatusMessage: crawlerLastStatusMessage,
+      lastError: crawlerLastError,
+    });
+  }
 }
 
 // Start or reset crawler background loop
@@ -167,6 +284,12 @@ app.get('/api/torn/db-targets', (req, res) => {
 
 // API Endpoint to get Crawler Status
 app.get('/api/torn/crawler-status', (req, res) => {
+  const reqKey = (req.query.key as string) || (req.headers['x-torn-key'] as string);
+  if (reqKey && (!crawlerApiKey || crawlerApiKey !== reqKey)) {
+    crawlerApiKey = reqKey;
+    saveCrawlerConfig({ apiKey: crawlerApiKey });
+  }
+
   const db = readDbTargets();
   return res.json({
     enabled: crawlerEnabled,
@@ -176,6 +299,10 @@ app.get('/api/torn/crawler-status', (req, res) => {
     totalInDb: db.length,
     lastRun: crawlerLastRun,
     nextRun: crawlerNextRun,
+    lastStatusMessage: crawlerLastStatusMessage,
+    lastError: crawlerLastError,
+    isScanning: crawlerIsScanning,
+    apiKeySet: Boolean(crawlerApiKey),
   });
 });
 
@@ -187,6 +314,12 @@ app.post('/api/torn/crawler-toggle', (req, res) => {
   if (apiKey) crawlerApiKey = apiKey;
   if (startId) crawlerCurrentId = parseInt(startId, 10);
 
+  saveCrawlerConfig({
+    enabled: crawlerEnabled,
+    apiKey: crawlerApiKey,
+    currentId: crawlerCurrentId,
+  });
+
   startCrawlerLoop();
 
   return res.json({
@@ -196,6 +329,31 @@ app.post('/api/torn/crawler-toggle', (req, res) => {
     message: crawlerEnabled
       ? `Auto-Crawler started! Scanning 20 User IDs every 1m 30s starting at ID #${crawlerCurrentId}`
       : 'Auto-Crawler paused.',
+  });
+});
+
+// API Endpoint to Force Scan Cycle Immediately
+app.post('/api/torn/crawler-scan-now', async (req, res) => {
+  const { apiKey, startId } = req.body || {};
+
+  if (apiKey) crawlerApiKey = apiKey;
+  if (startId) crawlerCurrentId = parseInt(startId, 10);
+
+  saveCrawlerConfig({
+    apiKey: crawlerApiKey,
+    currentId: crawlerCurrentId,
+  });
+
+  await executeCrawlerCycle(apiKey);
+
+  const db = readDbTargets();
+  return res.json({
+    success: true,
+    currentId: crawlerCurrentId,
+    totalInDb: db.length,
+    lastRun: crawlerLastRun,
+    lastStatusMessage: crawlerLastStatusMessage,
+    lastError: crawlerLastError,
   });
 });
 
@@ -366,6 +524,12 @@ async function startServer() {
       if (req.path.startsWith('/api')) return next();
       res.sendFile(path.resolve('dist/index.html'));
     });
+  }
+
+  // Start background auto-crawler loop if enabled in persistent config
+  if (crawlerEnabled) {
+    console.log(`[Auto-Crawler] Restoring active background crawler starting at ID #${crawlerCurrentId}`);
+    startCrawlerLoop();
   }
 
   app.listen(PORT, () => {
