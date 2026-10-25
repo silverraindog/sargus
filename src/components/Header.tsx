@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Key, Crosshair, Sparkles, Bookmark, Search } from 'lucide-react';
+import { Shield, Key, Crosshair, Sparkles, Bookmark, Search, History } from 'lucide-react';
 import { PlayerProfile, BattleStats } from '../types/torn';
 import { formatStatNumber } from '../utils/ffscouter';
 
@@ -8,9 +8,10 @@ interface HeaderProps {
   onOpenKeyModal: () => void;
   playerProfile: PlayerProfile | null;
   playerStats: BattleStats | null;
-  activeTab: 'targets' | 'scanner' | 'advisor' | 'bookmarks';
-  setActiveTab: (tab: 'targets' | 'scanner' | 'advisor' | 'bookmarks') => void;
+  activeTab: 'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history';
+  setActiveTab: (tab: 'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history') => void;
   bookmarkCount: number;
+  historyCount: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,6 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   bookmarkCount,
+  historyCount,
 }) => {
   return (
     <header className="border-b border-slate-800 bg-slate-950/90 backdrop-blur-md sticky top-0 z-40">
@@ -89,6 +91,23 @@ export const Header: React.FC<HeaderProps> = ({
             {bookmarkCount > 0 && (
               <span className="ml-1 px-1.5 py-0.2 text-[10px] font-mono bg-red-600 text-white rounded-full">
                 {bookmarkCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 whitespace-nowrap relative ${
+              activeTab === 'history'
+                ? 'bg-red-500/10 text-red-400 border border-red-500/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <History className="w-4 h-4 text-emerald-400" />
+            <span>Attack History</span>
+            {historyCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 text-[10px] font-mono bg-emerald-600 text-white rounded-full">
+                {historyCount}
               </span>
             )}
           </button>

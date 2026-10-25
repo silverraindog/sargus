@@ -5,11 +5,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests
-COPY package*.json ./
+# Copy package manifest
+COPY package.json ./
 
-# Install dependencies (use npm install so build succeeds with or without package-lock.json)
-RUN npm install
+# Install dependencies using --legacy-peer-deps to prevent edgesOut npm resolver bug
+RUN npm install --legacy-peer-deps
 
 # Copy source code
 COPY . .
@@ -25,9 +25,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Copy package manifests and install runtime dependencies
-COPY package*.json ./
-RUN npm install
+# Copy package manifest and install runtime dependencies
+COPY package.json ./
+RUN npm install --legacy-peer-deps
 
 # Copy built frontend assets from builder stage
 COPY --from=builder /app/dist ./dist

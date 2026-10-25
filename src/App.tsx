@@ -14,14 +14,15 @@ import { TargetDetailModal } from './components/TargetDetailModal';
 import { FactionScannerModal } from './components/FactionScannerModal';
 import { AiTacticalAdvisorModal } from './components/AiTacticalAdvisorModal';
 import { BookmarksDrawer } from './components/BookmarksDrawer';
+import { AttackHistoryTab } from './components/AttackHistoryTab';
 
-import { BattleStats, FilterOptions, InactiveTarget, PlayerProfile } from './types/torn';
+import { AttackHistoryItem, BattleStats, FilterOptions, InactiveTarget, PlayerProfile } from './types/torn';
 import { clearStoredApiKey, fetchSelfProfile, getStoredApiKey, loadInitialTargets, setStoredApiKey } from './services/tornApi';
 import { calculateFFScouterEstimate } from './utils/ffscouter';
-import { RefreshCw, ShieldAlert, Sparkles, Swords } from 'lucide-react';
 
 const BOOKMARKS_STORAGE_KEY = 'torn_scouter_bookmarks';
 const NOTES_STORAGE_KEY = 'torn_scouter_notes';
+const HISTORY_STORAGE_KEY = 'sargus_attack_history';
 
 export default function App() {
   const [apiKey, setApiKey] = useState<string>(getStoredApiKey());
@@ -29,7 +30,6 @@ export default function App() {
 
   const [playerProfile, setPlayerProfile] = useState<PlayerProfile | null>(null);
   const [playerStats, setPlayerStats] = useState<BattleStats | null>(null);
-  const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
 
   const [targets, setTargets] = useState<InactiveTarget[]>([]);
   const [selectedTarget, setSelectedTarget] = useState<InactiveTarget | null>(null);
@@ -52,7 +52,16 @@ export default function App() {
     }
   });
 
-  const [activeTab, setActiveTab] = useState<'targets' | 'scanner' | 'advisor' | 'bookmarks'>('targets');
+  const [attackHistory, setAttackHistory] = useState<AttackHistoryItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [activeTab, setActiveTab] = useState<'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history'>('targets');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
   // Filter state defaulting to >= 30 days offline (1 month or more as requested)
@@ -70,7 +79,6 @@ export default function App() {
 
   // Load player profile & initialize targets
   const loadProfileAndTargets = async (key: string) => {
-    setLoadingProfile(true);
     try {
       const { profile, battleStats } = await fetchSelfProfile(key);
       setPlayerProfile(profile);
@@ -79,9 +87,7 @@ export default function App() {
       const initialTargets = loadInitialTargets(battleStats);
       setTargets(initialTargets);
     } catch (err) {
-      console.error('Error initializing Torn Scouter:', err);
-    } finally {
-      setLoadingProfile(false);
+      console.error('Error initializing Sargus:', err);
     }
   };
 
@@ -118,13 +124,66 @@ export default function App() {
     });
   };
 
-  // Mark Attacked
+  // Track Attack Action
   const handleMarkAttacked = (targetId: number) => {
+    const targetObj = targets.find((t) => t.player_id === targetId);
+
+    if (targetObj) {
+      const newEntry: AttackHistoryItem = {
+        id: `${targetId}_${Date.now()}`,
+        targetId: targetObj.player_id,
+        targetName: targetObj.name,
+        targetLevel: targetObj.level,
+        factionName: targetObj.faction?.faction_name,
+        estimatedTotalStats: targetObj.ffScouter.estimatedTotalStats,
+        difficulty: targetObj.ffScouter.difficulty,
+        difficultyLabel: targetObj.ffScouter.difficultyLabel,
+        estimatedFFMultiplier: targetObj.ffScouter.estimatedFFMultiplier,
+        attackUrl: targetObj.attackUrl,
+        timestamp: Date.now(),
+      };
+
+      setAttackHistory((prev) => {
+        const updated = [newEntry, ...prev];
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+        return updated;
+      });
+    }
+
     setTargets((prev) =>
       prev.map((t) =>
         t.player_id === targetId ? { ...t, lastAttackedTimestamp: Date.now() } : t
       )
     );
+  };
+
+  // Handle re-attacking from History tab
+  const handleAttackAgainFromHistory = (item: AttackHistoryItem) => {
+    const newEntry: AttackHistoryItem = {
+      ...item,
+      id: `${item.targetId}_${Date.now()}`,
+      timestamp: Date.now(),
+    };
+    setAttackHistory((prev) => {
+      const updated = [newEntry, ...prev];
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Clear attack history
+  const handleClearHistory = () => {
+    setAttackHistory([]);
+    localStorage.removeItem(HISTORY_STORAGE_KEY);
+  };
+
+  // Remove single history item
+  const handleRemoveHistoryItem = (id: string) => {
+    setAttackHistory((prev) => {
+      const updated = prev.filter((item) => item.id !== id);
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+      return updated;
+    });
   };
 
   // Add scanned targets from faction scanner
@@ -144,27 +203,17 @@ export default function App() {
         ...t,
         isBookmarked: bookmarkedIds.includes(t.player_id),
         notes: notesMap[t.player_id] || t.notes || '',
-        // Re-calculate FFScouter estimate if playerStats changed
         ffScouter: playerStats ? calculateFFScouterEstimate(t, playerStats) : t.ffScouter,
       }))
       .filter((target) => {
-        // 1. Min Days Offline (Inactives in 1 month / 30d+)
         if (target.daysOffline < filters.minDaysOffline) return false;
-
-        // 2. Level filter
         if (target.level < filters.minLevel || target.level > filters.maxLevel) return false;
-
-        // 3. Difficulty filter
         if (filters.difficultyFilter !== 'ALL' && target.ffScouter.difficulty !== filters.difficultyFilter) {
           return false;
         }
-
-        // 4. Status filter
         if (filters.statusFilter === 'OKAY_ONLY' && target.status.state !== 'Okay') {
           return false;
         }
-
-        // 5. Search query
         if (filters.searchQuery.trim()) {
           const q = filters.searchQuery.toLowerCase();
           const nameMatch = target.name.toLowerCase().includes(q);
@@ -172,7 +221,6 @@ export default function App() {
           const factionMatch = target.faction?.faction_name.toLowerCase().includes(q) || false;
           if (!nameMatch && !idMatch && !factionMatch) return false;
         }
-
         return true;
       })
       .sort((a, b) => {
@@ -216,6 +264,7 @@ export default function App() {
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           bookmarkCount={bookmarkedIds.length}
+          historyCount={attackHistory.length}
         />
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -293,6 +342,16 @@ export default function App() {
                 setBookmarkedIds([]);
                 localStorage.removeItem(BOOKMARKS_STORAGE_KEY);
               }}
+            />
+          )}
+
+          {/* Tab 5: Attack History Log */}
+          {activeTab === 'history' && (
+            <AttackHistoryTab
+              history={attackHistory}
+              onClearHistory={handleClearHistory}
+              onRemoveItem={handleRemoveHistoryItem}
+              onAttackAgain={handleAttackAgainFromHistory}
             />
           )}
         </main>

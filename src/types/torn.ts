@@ -79,6 +79,20 @@ export interface InactiveTarget extends PlayerProfile {
   lastAttackedTimestamp?: number;
 }
 
+export interface AttackHistoryItem {
+  id: string;
+  targetId: number;
+  targetName: string;
+  targetLevel: number;
+  factionName?: string;
+  estimatedTotalStats: number;
+  difficulty: DifficultyLevel;
+  difficultyLabel: string;
+  estimatedFFMultiplier: number;
+  attackUrl: string;
+  timestamp: number;
+}
+
 export interface FilterOptions {
   minDaysOffline: number; // 30 = 1 month
   minLevel: number;
