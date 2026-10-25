@@ -26,6 +26,7 @@ const BOOKMARKS_STORAGE_KEY = 'torn_scouter_bookmarks';
 const NOTES_STORAGE_KEY = 'torn_scouter_notes';
 const HISTORY_STORAGE_KEY = 'sargus_attack_history';
 const ARCHIVE_STORAGE_KEY = 'sargus_archived_attack_history';
+const AUTO_REFRESH_STORAGE_KEY = 'sargus_auto_refresh_sec';
 
 export default function App() {
   const [apiKey, setApiKey] = useState<string>(getStoredApiKey());
@@ -40,6 +41,23 @@ export default function App() {
 
   const [nextScanStartId, setNextScanStartId] = useState<number>(185000);
   const [isScanningLive, setIsScanningLive] = useState<boolean>(false);
+
+  // Auto Refresh state
+  const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
+      return saved !== null ? parseInt(saved, 10) : 10;
+    } catch {
+      return 10;
+    }
+  });
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(Date.now());
+
+  const handleAutoRefreshIntervalChange = (seconds: number) => {
+    setAutoRefreshInterval(seconds);
+    localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, seconds.toString());
+  };
 
   const [bookmarkedIds, setBookmarkedIds] = useState<number[]>(() => {
     try {
@@ -171,6 +189,36 @@ export default function App() {
       console.error('Failed to load DB targets:', e);
     }
   };
+
+  // Manual Global Refresh
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetchDbTargets();
+      if (apiKey) {
+        const { profile, battleStats, error } = await fetchSelfProfile(apiKey);
+        if (profile) setPlayerProfile(profile);
+        if (battleStats) setPlayerStats(battleStats);
+        if (error) setProfileError(error);
+      }
+    } catch (err) {
+      console.error('Manual refresh error:', err);
+    } finally {
+      setLastRefreshedAt(Date.now());
+      setIsRefreshing(false);
+    }
+  };
+
+  // Periodic Auto Refresh Timer
+  useEffect(() => {
+    if (autoRefreshInterval <= 0) return;
+
+    const timer = setInterval(() => {
+      handleManualRefresh();
+    }, autoRefreshInterval * 1000);
+
+    return () => clearInterval(timer);
+  }, [autoRefreshInterval, apiKey]);
 
   // Load player profile & initialize targets
   const loadProfileAndTargets = async (key: string) => {
@@ -342,12 +390,16 @@ export default function App() {
     });
   };
 
-  // Add scanned targets from faction scanner or crawler
+  // Add or update scanned targets from faction scanner or crawler
   const handleAddScannedTargets = (scanned: InactiveTarget[]) => {
     setTargets((prev) => {
       const existingIds = new Set(prev.map((p) => p.player_id));
       const newItems = scanned.filter((s) => !existingIds.has(s.player_id));
-      return [...newItems, ...prev];
+      const updatedPrev = prev.map((item) => {
+        const match = scanned.find((s) => s.player_id === item.player_id);
+        return match ? { ...item, ...match } : item;
+      });
+      return [...newItems, ...updatedPrev];
     });
   };
 
@@ -436,6 +488,11 @@ export default function App() {
           setActiveTab={setActiveTab}
           bookmarkCount={bookmarkedIds.length}
           historyCount={attackHistory.length}
+          autoRefreshInterval={autoRefreshInterval}
+          onAutoRefreshIntervalChange={handleAutoRefreshIntervalChange}
+          onManualRefresh={handleManualRefresh}
+          isRefreshing={isRefreshing}
+          lastRefreshedAt={lastRefreshedAt}
         />
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">

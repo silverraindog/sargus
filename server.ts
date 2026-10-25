@@ -114,7 +114,7 @@ function readCrawlerConfig(): CrawlerConfig {
     apiKey: '',
     currentId: 180000,
     batchSize: 20,
-    intervalMs: 90000,
+    intervalMs: 30000,
     lastRun: 0,
     nextRun: 0,
     lastStatusMessage: 'Crawler initialized',
@@ -138,7 +138,7 @@ let crawlerEnabled = initialCrawlerConfig.enabled ?? false;
 let crawlerApiKey = initialCrawlerConfig.apiKey || '';
 let crawlerCurrentId = initialCrawlerConfig.currentId || 180000;
 let crawlerBatchSize = initialCrawlerConfig.batchSize || 20;
-let crawlerIntervalMs = initialCrawlerConfig.intervalMs || 90 * 1000; // 90 seconds
+let crawlerIntervalMs = initialCrawlerConfig.intervalMs || 30 * 1000; // 30 seconds loop
 let crawlerLastRun = initialCrawlerConfig.lastRun || 0;
 let crawlerNextRun = initialCrawlerConfig.nextRun || 0;
 let crawlerLastStatusMessage = initialCrawlerConfig.lastStatusMessage || 'Idle';
@@ -148,7 +148,15 @@ let crawlerTimer: NodeJS.Timeout | null = null;
 
 // Function that executes one auto-scan cycle
 async function executeCrawlerCycle(overrideApiKey?: string) {
-  if (crawlerIsScanning) return;
+  // Safety watchdog: if stuck scanning for >25 seconds, force-reset flag
+  if (crawlerIsScanning) {
+    if (Date.now() - crawlerLastRun > 25000) {
+      console.warn('[Auto-Crawler] Resetting stuck scanning flag after watchdog timeout.');
+      crawlerIsScanning = false;
+    } else {
+      return;
+    }
+  }
 
   const activeKey = overrideApiKey || crawlerApiKey;
   if (!activeKey) {

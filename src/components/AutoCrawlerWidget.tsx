@@ -29,7 +29,7 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
       setEnabled(data.enabled);
       setCurrentId(data.currentId);
       if (data.totalInDb !== undefined) {
-        if (data.totalInDb !== totalInDb && totalInDb !== 0) {
+        if (data.totalInDb !== totalInDb) {
           onDbTargetsUpdated();
         }
         setTotalInDb(data.totalInDb);
@@ -156,7 +156,7 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
                     : 'bg-slate-950 text-slate-500 border-slate-800'
                 }`}
               >
-                {isScanning ? '⚡ SCANNING...' : enabled ? '🟢 ACTIVE (90s Loop)' : '⚪ PAUSED'}
+                {isScanning ? '⚡ SCANNING...' : enabled ? '🟢 ACTIVE (30s Loop)' : '⚪ PAUSED'}
               </span>
             </div>
 

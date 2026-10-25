@@ -2,6 +2,7 @@ import React from 'react';
 import { Shield, Key, Crosshair, Sparkles, Bookmark, Search, History } from 'lucide-react';
 import { PlayerProfile, BattleStats } from '../types/torn';
 import { formatStatNumber } from '../utils/ffscouter';
+import { AutoRefreshDropdown } from './AutoRefreshDropdown';
 
 interface HeaderProps {
   apiKey: string;
@@ -12,6 +13,11 @@ interface HeaderProps {
   setActiveTab: (tab: 'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history') => void;
   bookmarkCount: number;
   historyCount: number;
+  autoRefreshInterval: number;
+  onAutoRefreshIntervalChange: (seconds: number) => void;
+  onManualRefresh: () => Promise<void> | void;
+  isRefreshing?: boolean;
+  lastRefreshedAt?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -23,10 +29,15 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   bookmarkCount,
   historyCount,
+  autoRefreshInterval,
+  onAutoRefreshIntervalChange,
+  onManualRefresh,
+  isRefreshing = false,
+  lastRefreshedAt = 0,
 }) => {
   return (
     <header className="border-b border-slate-800 bg-slate-950/90 backdrop-blur-md sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 sm:gap-8">
         {/* Zone 1: Wordmark */}
         <div className="flex items-center gap-3 shrink-0">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-rose-600 to-red-800 flex items-center justify-center shadow-lg shadow-red-950/50 border border-red-500/30">
@@ -113,8 +124,17 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </nav>
 
-        {/* Zone 3: Single Primary Action / API Key Status */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Zone 3: Player Info, Auto Refresh & API Key Status */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Auto Refresh Dropdown */}
+          <AutoRefreshDropdown
+            interval={autoRefreshInterval}
+            onIntervalChange={onAutoRefreshIntervalChange}
+            onManualRefresh={onManualRefresh}
+            isRefreshing={isRefreshing}
+            lastRefreshedAt={lastRefreshedAt}
+          />
+
           {playerProfile && playerStats ? (
             <div className="hidden lg:flex items-center gap-3 px-3 py-1 rounded-md bg-slate-900/80 border border-slate-800 text-xs text-slate-300 font-mono">
               <div>
