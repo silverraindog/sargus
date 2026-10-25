@@ -132,12 +132,16 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button
             onClick={onOpenKeyModal}
-            className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-red-500/50 text-xs font-mono text-slate-200 hover:text-white transition-colors flex items-center gap-2 shrink-0"
+            className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition-all flex items-center gap-2 shrink-0 ${
+              apiKey
+                ? 'bg-slate-900 border-slate-700 hover:border-red-500/50 text-slate-200'
+                : 'bg-gradient-to-r from-amber-600 to-red-600 border-amber-500 text-white font-extrabold shadow-lg shadow-red-950/80 animate-pulse'
+            }`}
           >
-            <Key className="w-3.5 h-3.5 text-amber-400" />
+            <Key className="w-3.5 h-3.5 text-amber-300" />
             <span className="hidden sm:inline">API KEY:</span>
-            <span className="text-emerald-400 font-bold">
-              {apiKey ? `${apiKey.substring(0, 4)}...${apiKey.slice(-3)}` : 'SET KEY'}
+            <span className="font-bold">
+              {apiKey ? `${apiKey.substring(0, 4)}...${apiKey.slice(-3)}` : 'SET YOUR KEY'}
             </span>
           </button>
         </div>

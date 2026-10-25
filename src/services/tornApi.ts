@@ -2,12 +2,11 @@ import { BattleStats, InactiveTarget, PlayerProfile } from '../types/torn';
 import { calculateDaysOffline, calculateFFScouterEstimate } from '../utils/ffscouter';
 import { getInactivePresets } from '../data/inactivePresets';
 
-const STORAGE_KEY_NAME = 'torn_scouter_api_key';
-export const DEMO_API_KEY = 'KS2IeiX56Cl52z3B';
+const STORAGE_KEY_NAME = 'sargus_api_key';
 
 export function getStoredApiKey(): string {
   if (typeof window === 'undefined') return '';
-  return localStorage.getItem(STORAGE_KEY_NAME) || DEMO_API_KEY;
+  return localStorage.getItem(STORAGE_KEY_NAME) || '';
 }
 
 export function setStoredApiKey(key: string): void {
@@ -21,9 +20,32 @@ export function clearStoredApiKey(): void {
 }
 
 /**
- * Fetches the authenticated user's profile and battle stats.
+ * Fetches the authenticated user's profile and battle stats using their own API key.
  */
 export async function fetchSelfProfile(apiKey: string): Promise<{ profile: PlayerProfile; battleStats: BattleStats }> {
+  if (!apiKey) {
+    const fallbackStats: BattleStats = {
+      strength: 15000,
+      defense: 15000,
+      speed: 15000,
+      dexterity: 15000,
+      total: 60000,
+    };
+    return {
+      profile: {
+        player_id: 0,
+        name: 'Guest Player',
+        level: 1,
+        age: 1,
+        rank: 'Unauthenticated',
+        last_action: { status: 'Offline', timestamp: Math.floor(Date.now() / 1000), relative: 'Offline' },
+        status: { description: 'API Key Required', details: '', state: 'Okay', until: 0 },
+        battleStats: fallbackStats,
+      },
+      battleStats: fallbackStats,
+    };
+  }
+
   try {
     const res = await fetch(`/api/torn/user?key=${encodeURIComponent(apiKey)}`);
     const data = await res.json();
@@ -56,8 +78,7 @@ export async function fetchSelfProfile(apiKey: string): Promise<{ profile: Playe
 
     return { profile, battleStats };
   } catch (err: any) {
-    console.warn('Using default fallback player profile due to API error:', err.message);
-    // Return standard fallback profile
+    console.warn('API Key validation error:', err.message);
     const fallbackStats: BattleStats = {
       strength: 15000,
       defense: 15000,
@@ -140,7 +161,7 @@ export async function scanFactionMembers(
 }
 
 /**
- * Combines preset targets, live faction scans, and custom IDs into a unified targets list.
+ * Loads inactive target presets.
  */
 export function loadInitialTargets(playerStats: BattleStats): InactiveTarget[] {
   return getInactivePresets(playerStats);

@@ -19,6 +19,7 @@ import { AttackHistoryTab } from './components/AttackHistoryTab';
 import { AttackHistoryItem, BattleStats, FilterOptions, InactiveTarget, PlayerProfile } from './types/torn';
 import { clearStoredApiKey, fetchSelfProfile, getStoredApiKey, loadInitialTargets, setStoredApiKey } from './services/tornApi';
 import { calculateFFScouterEstimate } from './utils/ffscouter';
+import { Key, ShieldAlert } from 'lucide-react';
 
 const BOOKMARKS_STORAGE_KEY = 'torn_scouter_bookmarks';
 const NOTES_STORAGE_KEY = 'torn_scouter_notes';
@@ -26,7 +27,8 @@ const HISTORY_STORAGE_KEY = 'sargus_attack_history';
 
 export default function App() {
   const [apiKey, setApiKey] = useState<string>(getStoredApiKey());
-  const [isKeyModalOpen, setIsKeyModalOpen] = useState<boolean>(false);
+  // Open modal automatically on page load if user hasn't set their key yet
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState<boolean>(!getStoredApiKey());
 
   const [playerProfile, setPlayerProfile] = useState<PlayerProfile | null>(null);
   const [playerStats, setPlayerStats] = useState<BattleStats | null>(null);
@@ -92,9 +94,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (apiKey) {
-      loadProfileAndTargets(apiKey);
-    }
+    loadProfileAndTargets(apiKey);
   }, [apiKey]);
 
   // Handle API Key update
@@ -255,6 +255,22 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-red-500 selection:text-white flex flex-col justify-between">
       <div>
+        {/* API Key Setup Banner if no key configured */}
+        {!apiKey && (
+          <div className="bg-gradient-to-r from-amber-950 via-slate-900 to-red-950 border-b border-amber-800/80 px-4 py-2 text-xs text-amber-200 font-mono text-center flex flex-wrap items-center justify-center gap-2 shadow-lg">
+            <span className="flex items-center gap-1">
+              <Key className="w-3.5 h-3.5 text-amber-400" />
+              <strong>Welcome to Sargus!</strong> Setup your own Torn API Key to fetch your live level &amp; battle stats.
+            </span>
+            <button
+              onClick={() => setIsKeyModalOpen(true)}
+              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold rounded-lg transition-colors uppercase text-[10px] shadow-sm"
+            >
+              Configure Your Key
+            </button>
+          </div>
+        )}
+
         {/* Header Navigation */}
         <Header
           apiKey={apiKey}

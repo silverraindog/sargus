@@ -8,7 +8,7 @@
 
 ## 🚀 Key Features
 
-* **🔑 Torn API Authentication**: Connect using your standard public Torn API key (or test instantly using the built-in demo key `KS2IeiX56Cl52z3B`).
+* **🔑 Torn API Authentication**: Connect securely using your standard public Torn API key (`torn.com/preferences.php#tab=api`).
 * **⏳ Inactive Target Finder (≥ 30 Days Offline)**: Filter players who haven't logged on in **1 month (30d+)**, 2 months, 3 months, 6 months, or 1 year+.
 * **📊 FFScouter Battle Stat Estimation**: Calculates target battle stats based on public metrics:
   * Base Level curve formula
