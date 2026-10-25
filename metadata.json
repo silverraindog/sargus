@@ -1,0 +1,6 @@
+{
+  "name": "Torn Scouter - Inactive Target & Battle Stat Finder",
+  "description": "Scout inactive Torn City players (>30 days offline), estimate battle stats with FFScouter difficulty indicators, and access direct attack links.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
