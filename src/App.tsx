@@ -15,10 +15,11 @@ import { FactionScannerModal } from './components/FactionScannerModal';
 import { AiTacticalAdvisorModal } from './components/AiTacticalAdvisorModal';
 import { BookmarksDrawer } from './components/BookmarksDrawer';
 import { AttackHistoryTab } from './components/AttackHistoryTab';
+import { AutoCrawlerWidget } from './components/AutoCrawlerWidget';
 
 import { AttackHistoryItem, BattleStats, FilterOptions, InactiveTarget, PlayerProfile } from './types/torn';
 import { clearStoredApiKey, fetchSelfProfile, getStoredApiKey, loadInitialTargets, setStoredApiKey } from './services/tornApi';
-import { calculateFFScouterEstimate } from './utils/ffscouter';
+import { calculateDaysOffline, calculateFFScouterEstimate } from './utils/ffscouter';
 import { Key, ShieldAlert } from 'lucide-react';
 
 const BOOKMARKS_STORAGE_KEY = 'torn_scouter_bookmarks';
@@ -35,6 +36,9 @@ export default function App() {
 
   const [targets, setTargets] = useState<InactiveTarget[]>([]);
   const [selectedTarget, setSelectedTarget] = useState<InactiveTarget | null>(null);
+
+  const [nextScanStartId, setNextScanStartId] = useState<number>(185000);
+  const [isScanningLive, setIsScanningLive] = useState<boolean>(false);
 
   const [bookmarkedIds, setBookmarkedIds] = useState<number[]>(() => {
     try {
@@ -79,6 +83,43 @@ export default function App() {
     sourceCategory: 'ALL',
   });
 
+  // Fetch targets stored in server's persistent file database
+  const fetchDbTargets = async () => {
+    try {
+      const res = await fetch('/api/torn/db-targets');
+      const data = await res.json();
+      if (data.targets && Array.isArray(data.targets)) {
+        const parsedDbTargets: InactiveTarget[] = data.targets.map((u: any) => {
+          const daysOffline = calculateDaysOffline(u.last_action || { relative: '0 days' });
+          const rawProfile: Partial<PlayerProfile> = {
+            player_id: u.player_id,
+            name: u.name || `User_${u.player_id}`,
+            level: u.level || 1,
+            rank: u.rank || 'Civilian',
+            age: u.age || 100,
+            last_action: u.last_action || { status: 'Offline', relative: `${daysOffline} days ago`, timestamp: 0 },
+            status: u.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
+            personalstats: u.personalstats,
+          };
+
+          const ffScouter = calculateFFScouterEstimate(rawProfile, playerStats || { strength: 15000, defense: 15000, speed: 15000, dexterity: 15000, total: 60000 });
+
+          return {
+            ...rawProfile,
+            daysOffline,
+            ffScouter,
+            attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${u.player_id}`,
+            profileUrl: `https://www.torn.com/profiles.php?XID=${u.player_id}`,
+          } as InactiveTarget;
+        });
+
+        handleAddScannedTargets(parsedDbTargets);
+      }
+    } catch (e) {
+      console.error('Failed to load DB targets:', e);
+    }
+  };
+
   // Load player profile & initialize targets
   const loadProfileAndTargets = async (key: string) => {
     try {
@@ -88,6 +129,7 @@ export default function App() {
 
       const initialTargets = loadInitialTargets(battleStats);
       setTargets(initialTargets);
+      fetchDbTargets();
     } catch (err) {
       console.error('Error initializing Sargus:', err);
     }
@@ -102,6 +144,53 @@ export default function App() {
     setStoredApiKey(newKey);
     setApiKey(newKey);
     loadProfileAndTargets(newKey);
+  };
+
+  // Scan live User ID blocks directly from Torn API
+  const handleScanMoreLive = async () => {
+    if (!apiKey) {
+      setIsKeyModalOpen(true);
+      return;
+    }
+
+    setIsScanningLive(true);
+    try {
+      const res = await fetch(`/api/torn/scan-range?startId=${nextScanStartId}&count=20&key=${encodeURIComponent(apiKey)}`);
+      const data = await res.json();
+
+      if (data.users && Array.isArray(data.users)) {
+        const foundTargets: InactiveTarget[] = data.users.map((u: any) => {
+          const daysOffline = calculateDaysOffline(u.last_action || { relative: '0 days' });
+          const rawProfile: Partial<PlayerProfile> = {
+            player_id: u.player_id,
+            name: u.name || `User_${u.player_id}`,
+            level: u.level || 1,
+            rank: u.rank || 'Civilian',
+            age: u.age || 100,
+            last_action: u.last_action || { status: 'Offline', relative: `${daysOffline} days ago`, timestamp: 0 },
+            status: u.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
+            personalstats: u.personalstats,
+          };
+
+          const ffScouter = calculateFFScouterEstimate(rawProfile, playerStats || { strength: 15000, defense: 15000, speed: 15000, dexterity: 15000, total: 60000 });
+
+          return {
+            ...rawProfile,
+            daysOffline,
+            ffScouter,
+            attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${u.player_id}`,
+            profileUrl: `https://www.torn.com/profiles.php?XID=${u.player_id}`,
+          } as InactiveTarget;
+        });
+
+        handleAddScannedTargets(foundTargets);
+        setNextScanStartId((prev) => prev + 20);
+      }
+    } catch (err) {
+      console.error('Failed to fetch live API targets:', err);
+    } finally {
+      setIsScanningLive(false);
+    }
   };
 
   // Toggle Bookmark
@@ -186,14 +275,13 @@ export default function App() {
     });
   };
 
-  // Add scanned targets from faction scanner
+  // Add scanned targets from faction scanner or crawler
   const handleAddScannedTargets = (scanned: InactiveTarget[]) => {
     setTargets((prev) => {
       const existingIds = new Set(prev.map((p) => p.player_id));
       const newItems = scanned.filter((s) => !existingIds.has(s.player_id));
       return [...newItems, ...prev];
     });
-    setActiveTab('targets');
   };
 
   // Filtered and Sorted Targets Calculation
@@ -287,6 +375,9 @@ export default function App() {
           {/* Authenticated Player Overview Card */}
           <PlayerProfileCard profile={playerProfile} battleStats={playerStats} />
 
+          {/* Auto-Crawler Control Bar */}
+          <AutoCrawlerWidget apiKey={apiKey} onDbTargetsUpdated={fetchDbTargets} />
+
           {/* Tab 1: Main Target Scouting View */}
           {activeTab === 'targets' && (
             <>
@@ -310,6 +401,8 @@ export default function App() {
                 setViewMode={setViewMode}
                 totalCount={targets.length}
                 filteredCount={filteredTargets.length}
+                onScanMoreLive={handleScanMoreLive}
+                isScanningLive={isScanningLive}
               />
 
               {viewMode === 'table' ? (

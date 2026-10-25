@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Filter, ArrowUpDown, LayoutGrid, List, Clock, SlidersHorizontal, RefreshCw } from 'lucide-react';
+import { Search, Filter, ArrowUpDown, LayoutGrid, List, Clock, SlidersHorizontal, RefreshCw, Cpu } from 'lucide-react';
 import { DifficultyLevel, FilterOptions } from '../types/torn';
 
 interface TargetFilterBarProps {
@@ -10,6 +10,8 @@ interface TargetFilterBarProps {
   setViewMode: (mode: 'table' | 'cards') => void;
   totalCount: number;
   filteredCount: number;
+  onScanMoreLive?: () => void;
+  isScanningLive?: boolean;
 }
 
 export const TargetFilterBar: React.FC<TargetFilterBarProps> = ({
@@ -20,6 +22,8 @@ export const TargetFilterBar: React.FC<TargetFilterBarProps> = ({
   setViewMode,
   totalCount,
   filteredCount,
+  onScanMoreLive,
+  isScanningLive,
 }) => {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 mb-6 shadow-lg space-y-4 text-slate-100">
@@ -39,6 +43,18 @@ export const TargetFilterBar: React.FC<TargetFilterBarProps> = ({
 
         {/* View Toggle & Count Indicator */}
         <div className="flex items-center justify-between lg:justify-end gap-3 shrink-0">
+          {onScanMoreLive && (
+            <button
+              onClick={onScanMoreLive}
+              disabled={isScanningLive}
+              className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 disabled:opacity-50 text-white font-mono font-bold text-xs flex items-center gap-1.5 shadow-md shadow-red-950/50 transition-all shrink-0"
+              title="Query next batch of User IDs live from Torn API"
+            >
+              <Cpu className={`w-3.5 h-3.5 ${isScanningLive ? 'animate-spin' : ''}`} />
+              <span>{isScanningLive ? 'Querying API...' : 'Fetch Live API Targets'}</span>
+            </button>
+          )}
+
           <div className="text-xs text-slate-400 font-mono">
             Showing <span className="text-white font-bold">{filteredCount}</span> of{' '}
             <span className="text-slate-500">{totalCount}</span> targets
@@ -67,7 +83,7 @@ export const TargetFilterBar: React.FC<TargetFilterBarProps> = ({
         </div>
       </div>
 
-      {/* Offline Duration Segmented Tabs (Key requirement: Inactive in 1 month or more) */}
+      {/* Offline Duration Segmented Tabs */}
       <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
         <span className="text-xs font-mono text-slate-400 flex items-center gap-1 shrink-0 mr-1">
           <Clock className="w-3.5 h-3.5 text-red-400" /> INACTIVE DURATION:
