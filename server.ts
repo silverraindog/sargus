@@ -88,6 +88,14 @@ function setCache(key: string, data: any) {
 // File path for crawler state persistence
 const CRAWLER_CONFIG_PATH = path.join(DATA_DIR, 'crawler_config.json');
 
+export interface SkipRange {
+  start: number;
+  end: number;
+  reason: string;
+  count: number;
+  timestamp: number;
+}
+
 interface CrawlerConfig {
   enabled: boolean;
   apiKey: string;
@@ -98,6 +106,10 @@ interface CrawlerConfig {
   nextRun: number;
   lastStatusMessage: string;
   lastError: string;
+  consecutiveDeadBatches?: number;
+  consecutiveIncorrectIds?: number;
+  totalDeadBlocksSkipped?: number;
+  skipRanges?: SkipRange[];
 }
 
 function readCrawlerConfig(): CrawlerConfig {
@@ -119,6 +131,10 @@ function readCrawlerConfig(): CrawlerConfig {
     nextRun: 0,
     lastStatusMessage: 'Crawler initialized',
     lastError: '',
+    consecutiveDeadBatches: 0,
+    consecutiveIncorrectIds: 0,
+    totalDeadBlocksSkipped: 0,
+    skipRanges: [],
   };
 }
 
@@ -143,10 +159,211 @@ let crawlerLastRun = initialCrawlerConfig.lastRun || 0;
 let crawlerNextRun = initialCrawlerConfig.nextRun || 0;
 let crawlerLastStatusMessage = initialCrawlerConfig.lastStatusMessage || 'Idle';
 let crawlerLastError = initialCrawlerConfig.lastError || '';
+let crawlerConsecutiveDeadBatches = initialCrawlerConfig.consecutiveDeadBatches || 0;
+let crawlerConsecutiveIncorrectIds = initialCrawlerConfig.consecutiveIncorrectIds || 0;
+let crawlerTotalDeadBlocksSkipped = initialCrawlerConfig.totalDeadBlocksSkipped || 0;
+let crawlerLastJumpSize = 0;
+let crawlerSkipRanges: SkipRange[] = Array.isArray(initialCrawlerConfig.skipRanges) ? initialCrawlerConfig.skipRanges : [];
 let crawlerIsScanning = false;
 let crawlerTimer: NodeJS.Timeout | null = null;
 
-// Function that executes one auto-scan cycle
+// Real-time Live-Scan Progress tracking
+interface LiveScanState {
+  isScanning: boolean;
+  startId: number;
+  endId: number;
+  total: number;
+  scannedCount: number;
+  remaining: number;
+  currentPid: number;
+  isSkipping: boolean;
+  skipReason: string;
+  jumpStep?: number;
+  jumpTargetId?: number;
+  lastSkipTimestamp?: number;
+}
+
+const crawlerLiveScan: LiveScanState = {
+  isScanning: false,
+  startId: 180000,
+  endId: 180019,
+  total: 20,
+  scannedCount: 0,
+  remaining: 20,
+  currentPid: 180000,
+  isSkipping: false,
+  skipReason: '',
+  jumpStep: 0,
+  jumpTargetId: 0,
+  lastSkipTimestamp: 0,
+};
+
+
+// Bypass known dead/skip ranges
+function bypassKnownSkipRanges(id: number): { nextId: number; jumped: boolean; range?: SkipRange } {
+  let nextId = id;
+  let jumped = false;
+  let lastJumpRange: SkipRange | undefined;
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 50) {
+    changed = false;
+    iterations++;
+    for (const r of crawlerSkipRanges) {
+      if (nextId >= r.start && nextId <= r.end) {
+        nextId = r.end + 1;
+        jumped = true;
+        lastJumpRange = r;
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  return { nextId, jumped, range: lastJumpRange };
+}
+
+// Register dead range in skip-list and merge overlapping or adjacent entries
+function registerSkipRange(start: number, end: number, reason: string) {
+  if (start > end) return;
+  const count = end - start + 1;
+  const newRange: SkipRange = {
+    start,
+    end,
+    reason,
+    count,
+    timestamp: Date.now(),
+  };
+
+  let merged = false;
+  for (const existing of crawlerSkipRanges) {
+    if (
+      (newRange.start >= existing.start && newRange.start <= existing.end + 1) ||
+      (newRange.end >= existing.start - 1 && newRange.end <= existing.end) ||
+      (newRange.start <= existing.start && newRange.end >= existing.end)
+    ) {
+      existing.start = Math.min(existing.start, newRange.start);
+      existing.end = Math.max(existing.end, newRange.end);
+      existing.count = existing.end - existing.start + 1;
+      existing.timestamp = Date.now();
+      existing.reason = reason;
+      merged = true;
+      break;
+    }
+  }
+
+  if (!merged) {
+    crawlerSkipRanges.push(newRange);
+  }
+
+  // Sort ranges and prune to max 100 entries
+  crawlerSkipRanges.sort((a, b) => a.start - b.start);
+  if (crawlerSkipRanges.length > 100) {
+    crawlerSkipRanges = crawlerSkipRanges.slice(-100);
+  }
+}
+
+// Strict Batch Validation Check before DB persistence
+interface BatchValidationResult {
+  validTargets: TargetEntry[];
+  rejectedCount: number;
+  reasons: Record<string, number>;
+}
+
+function validateBatchTargets(
+  rawCandidates: any[],
+  existingMap: Map<number, boolean>
+): BatchValidationResult {
+  const validTargets: TargetEntry[] = [];
+  const seenInBatch = new Set<number>();
+  const reasons: Record<string, number> = {
+    invalid_id: 0,
+    already_in_db: 0,
+    duplicate_in_batch: 0,
+    invalid_profile_data: 0,
+    not_inactive_under_30d: 0,
+  };
+
+  for (const raw of rawCandidates) {
+    // 1. Verify Player ID is a positive integer
+    const pid = Number(raw.player_id);
+    if (!pid || isNaN(pid) || pid <= 0 || !Number.isInteger(pid)) {
+      reasons.invalid_id++;
+      continue;
+    }
+
+    // 2. Deduplication check against persistent DB
+    if (existingMap.has(pid)) {
+      reasons.already_in_db++;
+      continue;
+    }
+
+    // 3. Deduplication check within current batch
+    if (seenInBatch.has(pid)) {
+      reasons.duplicate_in_batch++;
+      continue;
+    }
+
+    // 4. Sanity check profile structure
+    if (!raw.name || typeof raw.name !== 'string' || raw.name.trim().length === 0) {
+      reasons.invalid_profile_data++;
+      continue;
+    }
+
+    // 5. Inactivity verification (must be >= 30 days offline)
+    let daysOffline = 0;
+    if (raw.last_action?.timestamp && raw.last_action.timestamp > 0) {
+      const diffSec = Math.floor(Date.now() / 1000) - raw.last_action.timestamp;
+      daysOffline = Math.max(0, Math.floor(diffSec / 86400));
+    } else {
+      const rel = (raw.last_action?.relative || '').toLowerCase();
+      if (rel.includes('year')) {
+        daysOffline = (parseInt(rel, 10) || 1) * 365;
+      } else if (rel.includes('month')) {
+        daysOffline = (parseInt(rel, 10) || 1) * 30;
+      } else if (rel.includes('day')) {
+        daysOffline = parseInt(rel, 10) || 1;
+      }
+    }
+
+    if (daysOffline < 30) {
+      reasons.not_inactive_under_30d++;
+      continue;
+    }
+
+    // 6. Passed all validations - construct sanitized entry
+    const validatedEntry: TargetEntry = {
+      player_id: pid,
+      name: raw.name.trim(),
+      level: Math.max(1, Math.min(100, Number(raw.level) || 1)),
+      gender: raw.gender === 'Female' ? 'Female' : 'Male',
+      age: Math.max(1, Number(raw.age) || 100),
+      rank: typeof raw.rank === 'string' && raw.rank.trim() ? raw.rank.trim() : 'Civilian',
+      last_action: {
+        status: raw.last_action?.status || 'Offline',
+        timestamp: Number(raw.last_action?.timestamp) || 0,
+        relative: raw.last_action?.relative || `${daysOffline} days ago`,
+      },
+      status: {
+        description: raw.status?.description || 'Okay',
+        details: raw.status?.details || '',
+        state: raw.status?.state || 'Okay',
+        until: Number(raw.status?.until) || 0,
+      },
+      personalstats: raw.personalstats || {},
+      discoveredTimestamp: Date.now(),
+    };
+
+    seenInBatch.add(pid);
+    validTargets.push(validatedEntry);
+  }
+
+  const rejectedCount = Object.values(reasons).reduce((a, b) => a + b, 0);
+  return { validTargets, rejectedCount, reasons };
+}
+
+// Function that executes one auto-scan cycle with dynamic dead block jump and batch validation
 async function executeCrawlerCycle(overrideApiKey?: string) {
   // Safety watchdog: if stuck scanning for >25 seconds, force-reset flag
   if (crawlerIsScanning) {
@@ -170,6 +387,13 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
     crawlerApiKey = overrideApiKey;
   }
 
+  // Pre-check skip ranges before starting scan
+  const skipCheck = bypassKnownSkipRanges(crawlerCurrentId);
+  if (skipCheck.jumped) {
+    console.log(`[Auto-Crawler] Pre-check: Bypassed dead range. Fast-forwarded #${crawlerCurrentId} -> #${skipCheck.nextId}`);
+    crawlerCurrentId = skipCheck.nextId;
+  }
+
   crawlerIsScanning = true;
   crawlerLastRun = Date.now();
   crawlerNextRun = Date.now() + crawlerIntervalMs;
@@ -180,14 +404,34 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
   crawlerLastStatusMessage = `Scanning User IDs #${startId} to #${endId}...`;
   console.log(`[Auto-Crawler] Running cycle... User IDs #${startId} to #${endId}`);
 
+  // Initialize live scan progress
+  crawlerLiveScan.isScanning = true;
+  crawlerLiveScan.startId = startId;
+  crawlerLiveScan.endId = endId;
+  crawlerLiveScan.total = crawlerBatchSize;
+  crawlerLiveScan.scannedCount = 0;
+  crawlerLiveScan.remaining = crawlerBatchSize;
+  crawlerLiveScan.currentPid = startId;
+  crawlerLiveScan.isSkipping = crawlerConsecutiveIncorrectIds >= 5 || Boolean(skipCheck.jumped);
+  crawlerLiveScan.skipReason = skipCheck.jumped
+    ? `Fast-forwarded past dead range #${skipCheck.range?.start || startId}-#${skipCheck.range?.end || endId}`
+    : crawlerConsecutiveIncorrectIds >= 5
+    ? `Warning: ${crawlerConsecutiveIncorrectIds}/10 consecutive 404s encountered. Approaching auto-skip threshold.`
+    : '';
+
   const currentDb = readDbTargets();
   const existingMap = new Map<number, boolean>(currentDb.map((t) => [t.player_id, true]));
-  let newFoundCount = 0;
+  const rawBatchCandidates: any[] = [];
+  let invalidIdCount = 0;
+  let validAccountsFound = 0;
+  let autoThresholdJumped = false;
 
   try {
     // Process in 4 batches of 5 concurrent requests to stay within rate limits and speed up execution
     const chunkSize = 5;
     for (let batchStart = 0; batchStart < crawlerBatchSize; batchStart += chunkSize) {
+      if (autoThresholdJumped) break;
+
       const promises = [];
       for (let offset = 0; offset < chunkSize && (batchStart + offset) < crawlerBatchSize; offset++) {
         const pid = startId + batchStart + offset;
@@ -201,6 +445,13 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
 
       const results = await Promise.all(promises);
 
+      // Update live scan progress counter immediately after chunk finishes
+      crawlerLiveScan.scannedCount = Math.min(crawlerBatchSize, batchStart + results.length);
+      crawlerLiveScan.remaining = Math.max(0, crawlerBatchSize - crawlerLiveScan.scannedCount);
+      if (results.length > 0) {
+        crawlerLiveScan.currentPid = results[results.length - 1].pid;
+      }
+
       for (const item of results) {
         if ('error' in item && item.error) {
           continue;
@@ -210,57 +461,142 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
         if (!data) continue;
 
         if (data.error) {
-          crawlerLastError = data.error.error || `Torn API Error Code ${data.error.code}`;
-          console.warn(`[Auto-Crawler] Torn API Error on ID #${item.pid}:`, crawlerLastError);
+          const errCode = data.error.code;
+          const errMsg = data.error.error || '';
+          const isInvalidId =
+            errCode === 6 ||
+            errMsg.toLowerCase().includes('incorrect id') ||
+            errMsg.toLowerCase().includes('no user found');
+
+          if (!isInvalidId) {
+            // Only set crawlerLastError and log warning for true API / Auth / Rate Limit errors
+            crawlerLastError = errMsg || `Torn API Error Code ${errCode}`;
+            console.warn(`[Auto-Crawler] Torn API Error on ID #${item.pid}:`, crawlerLastError);
+          } else {
+            invalidIdCount++;
+            crawlerConsecutiveIncorrectIds++;
+            console.warn(`[Auto-Crawler] Torn API Error on ID #${item.pid}: Incorrect ID (consecutive: ${crawlerConsecutiveIncorrectIds})`);
+
+            // If getting close to threshold, enter skipping warning state
+            if (crawlerConsecutiveIncorrectIds >= 5) {
+              crawlerLiveScan.isSkipping = true;
+              crawlerLiveScan.skipReason = `Warning: ${crawlerConsecutiveIncorrectIds}/10 consecutive 404s encountered. Approaching dead-zone skip threshold.`;
+            }
+
+            // Failure threshold: If more than 10 consecutive 'Incorrect ID' errors are hit, trigger automatic jump of 500 IDs
+            if (crawlerConsecutiveIncorrectIds > 10) {
+              const jumpStep = 500;
+              const deadBlockStart = Math.max(1, item.pid - crawlerConsecutiveIncorrectIds + 1);
+              const deadBlockEnd = item.pid + jumpStep - 1;
+              registerSkipRange(deadBlockStart, deadBlockEnd, `Failure threshold exceeded (>10 consecutive Incorrect IDs)`);
+              crawlerTotalDeadBlocksSkipped++;
+              crawlerLastJumpSize = jumpStep;
+
+              const prospectiveId = item.pid + jumpStep;
+              const postCheck = bypassKnownSkipRanges(prospectiveId);
+              crawlerCurrentId = postCheck.nextId;
+              crawlerConsecutiveIncorrectIds = 0;
+              crawlerConsecutiveDeadBatches = 0;
+              autoThresholdJumped = true;
+
+              // Mark skipping state active
+              crawlerLiveScan.isSkipping = true;
+              crawlerLiveScan.skipReason = `🚨 Consecutive 404s threshold exceeded (>10 Incorrect IDs). Fast-forwarded +${jumpStep} IDs to #${crawlerCurrentId}!`;
+              crawlerLiveScan.jumpStep = jumpStep;
+              crawlerLiveScan.jumpTargetId = crawlerCurrentId;
+              crawlerLiveScan.lastSkipTimestamp = Date.now();
+              crawlerLiveScan.scannedCount = crawlerBatchSize;
+              crawlerLiveScan.remaining = 0;
+
+              crawlerLastStatusMessage = `🚀 Failure threshold hit (>10 consecutive Incorrect IDs). Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId}!`;
+              console.log(`[Auto-Crawler] Failure threshold reached (>10 consecutive Incorrect IDs). Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId} to bypass dead ID block.`);
+              break;
+            }
+          }
           continue;
         }
 
         if (data.player_id) {
-          const rel = data.last_action?.relative || '';
-          const isOffline =
-            data.last_action?.status === 'Offline' ||
-            rel.includes('month') ||
-            rel.includes('year') ||
-            parseInt(rel, 10) >= 30;
-
-          if (isOffline && !existingMap.has(data.player_id)) {
-            const entry: TargetEntry = {
-              player_id: data.player_id,
-              name: data.name || `User_${data.player_id}`,
-              level: data.level || 1,
-              gender: data.gender || 'Male',
-              age: data.age || 100,
-              rank: data.rank || 'Civilian',
-              last_action: data.last_action || { status: 'Offline', timestamp: 0, relative: '30+ days ago' },
-              status: data.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
-              personalstats: data.personalstats,
-              discoveredTimestamp: Date.now(),
-            };
-
-            currentDb.push(entry);
-            existingMap.set(data.player_id, true);
-            newFoundCount++;
-          }
+          // Valid player account found! Reset consecutive incorrect ID counter
+          crawlerConsecutiveIncorrectIds = 0;
+          validAccountsFound++;
+          rawBatchCandidates.push(data);
         }
+      }
+
+      if (autoThresholdJumped) {
+        break;
       }
 
       // Small delay between chunk batches
       await new Promise(resolve => setTimeout(resolve, 150));
     }
 
-    if (newFoundCount > 0) {
+    // Refactored Step: Batch Validation Check before DB storage
+    const { validTargets, rejectedCount, reasons } = validateBatchTargets(rawBatchCandidates, existingMap);
+
+    if (validTargets.length > 0) {
+      for (const t of validTargets) {
+        currentDb.push(t);
+        existingMap.set(t.player_id, true);
+      }
       writeDbTargets(currentDb);
-      console.log(`[Auto-Crawler] Added ${newFoundCount} new inactive targets. Total in DB: ${currentDb.length}`);
+      console.log(`[Auto-Crawler] [Batch Validation Passed] Saved ${validTargets.length} verified inactive targets. Total in DB: ${currentDb.length}`);
     }
 
-    crawlerLastStatusMessage = `Scanned #${startId}-#${endId}: ${newFoundCount > 0 ? `+${newFoundCount} new targets!` : 'No new inactive targets'}`;
+    // Dynamic Range Jump & Dead Block Skipping Logic
+    if (autoThresholdJumped) {
+      // Current ID already advanced by +500 and skip range logged
+    } else if (invalidIdCount >= 18) {
+      crawlerConsecutiveDeadBatches++;
+      registerSkipRange(startId, endId, 'Torn Incorrect ID / Empty Slot');
+
+      if (crawlerConsecutiveDeadBatches >= 2) {
+        // Extended dead zone detected! Implement automatic dynamic next-batch jump
+        let jumpStep = 200;
+        if (crawlerConsecutiveDeadBatches === 3) jumpStep = 500;
+        else if (crawlerConsecutiveDeadBatches >= 4) jumpStep = Math.min(2500, 1000 * (crawlerConsecutiveDeadBatches - 2));
+
+        const deadBlockEnd = startId + jumpStep - 1;
+        registerSkipRange(startId, deadBlockEnd, `Consecutive dead block (${crawlerConsecutiveDeadBatches} dead batches)`);
+        crawlerTotalDeadBlocksSkipped++;
+        crawlerLastJumpSize = jumpStep;
+
+        const prospectiveId = startId + jumpStep;
+        const postCheck = bypassKnownSkipRanges(prospectiveId);
+        crawlerCurrentId = postCheck.nextId;
+
+        crawlerLastStatusMessage = `🚀 Dead zone bypassed (${crawlerConsecutiveDeadBatches} consecutive empty batches). Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId}!`;
+        console.log(`[Auto-Crawler] Extended dead ID block detected: Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId} to ensure continuous DB population.`);
+      } else {
+        // 1st dead batch: advance standard batch size
+        crawlerCurrentId += crawlerBatchSize;
+        crawlerLastJumpSize = 0;
+        crawlerLastStatusMessage = `Scanned #${startId}-#${endId}: ${invalidIdCount}/${crawlerBatchSize} IDs empty/invalid slots (skipped).`;
+      }
+    } else {
+      // Valid player accounts were found in this batch!
+      crawlerConsecutiveDeadBatches = 0;
+      crawlerLastJumpSize = 0;
+      crawlerCurrentId += crawlerBatchSize;
+
+      if (validTargets.length > 0) {
+        crawlerLastStatusMessage = `Scanned #${startId}-#${endId}: +${validTargets.length} verified inactive targets added to DB!`;
+      } else if (validAccountsFound > 0) {
+        crawlerLastStatusMessage = `Scanned #${startId}-#${endId}: Found ${validAccountsFound} active accounts (${reasons.not_inactive_under_30d || 0} offline <30d, 0 added).`;
+      } else {
+        crawlerLastStatusMessage = `Scanned #${startId}-#${endId}: No valid targets met criteria.`;
+      }
+    }
   } catch (err: any) {
     console.error('[Auto-Crawler] Execution cycle error:', err);
     crawlerLastError = err?.message || 'Crawler execution error';
-  } finally {
-    // ALWAYS advance ID range after scan attempt so crawler doesn't freeze on one range
     crawlerCurrentId += crawlerBatchSize;
+  } finally {
     crawlerIsScanning = false;
+    crawlerLiveScan.isScanning = false;
+    crawlerLiveScan.scannedCount = crawlerLiveScan.total;
+    crawlerLiveScan.remaining = 0;
 
     saveCrawlerConfig({
       enabled: crawlerEnabled,
@@ -270,6 +606,10 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
       nextRun: crawlerNextRun,
       lastStatusMessage: crawlerLastStatusMessage,
       lastError: crawlerLastError,
+      consecutiveIncorrectIds: crawlerConsecutiveIncorrectIds,
+      consecutiveDeadBatches: crawlerConsecutiveDeadBatches,
+      totalDeadBlocksSkipped: crawlerTotalDeadBlocksSkipped,
+      skipRanges: crawlerSkipRanges,
     });
   }
 }
@@ -299,6 +639,9 @@ app.get('/api/torn/crawler-status', (req, res) => {
   }
 
   const db = readDbTargets();
+  const isRecentSkip = Boolean(crawlerLiveScan.lastSkipTimestamp && (Date.now() - crawlerLiveScan.lastSkipTimestamp < 15000));
+  const isSkippingState = Boolean(crawlerLiveScan.isSkipping || isRecentSkip || crawlerConsecutiveIncorrectIds >= 5 || crawlerConsecutiveDeadBatches >= 2);
+
   return res.json({
     enabled: crawlerEnabled,
     currentId: crawlerCurrentId,
@@ -311,6 +654,30 @@ app.get('/api/torn/crawler-status', (req, res) => {
     lastError: crawlerLastError,
     isScanning: crawlerIsScanning,
     apiKeySet: Boolean(crawlerApiKey),
+    consecutiveIncorrectIds: crawlerConsecutiveIncorrectIds,
+    consecutiveDeadBatches: crawlerConsecutiveDeadBatches,
+    totalDeadBlocksSkipped: crawlerTotalDeadBlocksSkipped,
+    lastJumpSize: crawlerLastJumpSize,
+    skipRangesCount: crawlerSkipRanges.length,
+    liveScan: {
+      isScanning: crawlerIsScanning,
+      startId: crawlerLiveScan.startId,
+      endId: crawlerLiveScan.endId,
+      total: crawlerLiveScan.total,
+      scannedCount: crawlerLiveScan.scannedCount,
+      remaining: crawlerLiveScan.remaining,
+      currentPid: crawlerLiveScan.currentPid,
+      isSkipping: isSkippingState,
+      skipReason: crawlerLiveScan.skipReason || (
+        crawlerConsecutiveIncorrectIds >= 5
+          ? `High 404 frequency: ${crawlerConsecutiveIncorrectIds}/10 consecutive Incorrect IDs`
+          : crawlerConsecutiveDeadBatches >= 2
+          ? `Consecutive dead batches (${crawlerConsecutiveDeadBatches} empty batches). Fast-forwarding.`
+          : ''
+      ),
+      jumpStep: crawlerLiveScan.jumpStep || crawlerLastJumpSize,
+      jumpTargetId: crawlerLiveScan.jumpTargetId || crawlerCurrentId,
+    },
   });
 });
 
@@ -320,12 +687,16 @@ app.post('/api/torn/crawler-toggle', (req, res) => {
 
   if (enabled !== undefined) crawlerEnabled = Boolean(enabled);
   if (apiKey) crawlerApiKey = apiKey;
-  if (startId) crawlerCurrentId = parseInt(startId, 10);
+  if (startId) {
+    crawlerCurrentId = parseInt(startId, 10);
+    crawlerConsecutiveIncorrectIds = 0;
+  }
 
   saveCrawlerConfig({
     enabled: crawlerEnabled,
     apiKey: crawlerApiKey,
     currentId: crawlerCurrentId,
+    consecutiveIncorrectIds: crawlerConsecutiveIncorrectIds,
   });
 
   startCrawlerLoop();
@@ -335,8 +706,46 @@ app.post('/api/torn/crawler-toggle', (req, res) => {
     enabled: crawlerEnabled,
     currentId: crawlerCurrentId,
     message: crawlerEnabled
-      ? `Auto-Crawler started! Scanning 20 User IDs every 1m 30s starting at ID #${crawlerCurrentId}`
+      ? `Auto-Crawler started! Scanning 20 User IDs every 30s starting at ID #${crawlerCurrentId}`
       : 'Auto-Crawler paused.',
+  });
+});
+
+// API Endpoint to Manually Jump Crawler ID Forward (e.g. +200, +500, +1000)
+app.post('/api/torn/crawler-jump', (req, res) => {
+  const { step, targetId } = req.body || {};
+  let newId = crawlerCurrentId;
+
+  if (typeof targetId === 'number' && targetId > 0) {
+    newId = targetId;
+  } else if (typeof step === 'number') {
+    newId = Math.max(1, crawlerCurrentId + step);
+  }
+
+  const check = bypassKnownSkipRanges(newId);
+  crawlerCurrentId = check.nextId;
+  crawlerConsecutiveDeadBatches = 0;
+  crawlerConsecutiveIncorrectIds = 0;
+  crawlerLastJumpSize = step || 0;
+  crawlerLastStatusMessage = `Manually jumped crawler forward to User ID #${crawlerCurrentId}`;
+
+  crawlerLiveScan.isSkipping = true;
+  crawlerLiveScan.skipReason = `Manually fast-forwarded +${step || 0} IDs to #${crawlerCurrentId}`;
+  crawlerLiveScan.jumpStep = step || 0;
+  crawlerLiveScan.jumpTargetId = crawlerCurrentId;
+  crawlerLiveScan.lastSkipTimestamp = Date.now();
+
+  saveCrawlerConfig({
+    currentId: crawlerCurrentId,
+    consecutiveDeadBatches: 0,
+    consecutiveIncorrectIds: 0,
+    lastStatusMessage: crawlerLastStatusMessage,
+  });
+
+  return res.json({
+    success: true,
+    currentId: crawlerCurrentId,
+    message: crawlerLastStatusMessage,
   });
 });
 

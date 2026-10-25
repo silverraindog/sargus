@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "apiKey": "KS2IeiX56Cl52z3B",
+  "currentId": 180540,
+  "batchSize": 20,
+  "intervalMs": 30000,
+  "lastRun": 0,
+  "nextRun": 0,
+  "lastStatusMessage": "Manually jumped crawler forward to User ID #180540",
+  "lastError": "",
+  "consecutiveDeadBatches": 0,
+  "consecutiveIncorrectIds": 0
+}
