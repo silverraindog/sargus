@@ -45,6 +45,15 @@
 ### Prerequisites
 * [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/) installed.
 
+### Run via GitHub Container Registry (GHCR)
+```bash
+# Pull published Docker image from GHCR
+docker pull ghcr.io/YOUR_GITHUB_USERNAME/sargus:latest
+
+# Run container on port 3000
+docker run -d -p 3000:3000 --name sargus ghcr.io/YOUR_GITHUB_USERNAME/sargus:latest
+```
+
 ### Build and Run locally with Docker Compose
 ```bash
 # Clone repository and navigate to root directory
@@ -95,12 +104,12 @@ PORT=3000
 
 ---
 
-## 🤖 Continuous Integration (CI)
+## 🤖 Continuous Integration & Automated Tagging (CI)
 
 This repository includes a GitHub Actions CI workflow in `.github/workflows/docker-ci.yml` that:
-1. Builds the Docker container using Buildx.
-2. Validates container health check endpoints.
-3. Tests deployment integrity on every `push` and `pull_request` to `main`.
+1. **Automated Semantic Tagging**: Automatically calculates and pushes git tags starting at `v0.0.1` and incrementing patch versions (`v0.0.2`, `v0.0.3`...) on every push to `main`/`master`.
+2. **GHCR Publishing**: Builds and pushes Docker images tagged with `ghcr.io/user/sargus:v0.0.x`, `ghcr.io/user/sargus:latest`, and git commit SHA.
+3. **Container Health Validation**: Tests deployment integrity on every commit using Docker Compose and health check endpoints.
 
 ---
 

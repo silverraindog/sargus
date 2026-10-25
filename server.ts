@@ -136,6 +136,8 @@ Keep response brief, formatted in bullet points with tactical tone.`;
   }
 });
 
+import path from 'path';
+
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -145,10 +147,14 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static('dist'));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) return next();
+      res.sendFile(path.resolve('dist/index.html'));
+    });
   }
 
   app.listen(PORT, () => {
-    console.log(`Torn Scouter server running on port ${PORT}`);
+    console.log(`Sargus server running on port ${PORT}`);
   });
 }
 

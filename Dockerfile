@@ -20,6 +20,9 @@ RUN npm run build
 # Stage 2: Production runner environment
 FROM node:20-alpine AS runner
 
+LABEL org.opencontainers.image.title="Sargus"
+LABEL org.opencontainers.image.description="Inactive Target & Battle Stat Finder for Torn City MMORPG"
+
 WORKDIR /app
 
 ENV NODE_ENV=production
