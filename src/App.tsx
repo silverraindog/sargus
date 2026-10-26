@@ -152,6 +152,8 @@ export default function App() {
     maxLevel: 100,
     difficultyFilter: 'ALL',
     statusFilter: 'ALL',
+    hiddenStatuses: [],
+
     searchQuery: '',
     sortBy: 'DAYS_OFFLINE',
     sortOrder: 'desc',
@@ -437,6 +439,9 @@ export default function App() {
         if (filters.difficultyFilter !== 'ALL' && target.ffScouter.difficulty !== filters.difficultyFilter) {
           return false;
         }
+        if (filters.hiddenStatuses.includes(target.status.state as any)) {
+          return false;
+        }
         if (filters.statusFilter === 'OKAY_ONLY' && target.status.state !== 'Okay') {
           return false;
         }
@@ -540,6 +545,8 @@ export default function App() {
                     maxLevel: 100,
                     difficultyFilter: 'ALL',
                     statusFilter: 'ALL',
+                    hiddenStatuses: [],
+
                     searchQuery: '',
                     sortBy: 'DAYS_OFFLINE',
                     sortOrder: 'desc',

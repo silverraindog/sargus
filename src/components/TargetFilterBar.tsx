@@ -155,18 +155,27 @@ export const TargetFilterBar: React.FC<TargetFilterBarProps> = ({
           </div>
         </div>
 
-        {/* Status Filter */}
-        <div>
-          <label className="block text-slate-400 font-mono mb-1">Target Status</label>
-          <select
-            value={filters.statusFilter}
-            onChange={(e) => onFilterChange({ statusFilter: e.target.value as any })}
-            className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 focus:outline-none focus:border-red-500 font-mono"
-          >
-            <option value="ALL">All Statuses</option>
-            <option value="OKAY_ONLY">Okay / Ready to Hit Only</option>
-            <option value="INCLUDE_HOSPITAL">Include Hospitalized</option>
-          </select>
+        {/* Hidden Statuses Filter */}
+        <div className="relative">
+          <label className="block text-slate-400 font-mono mb-1">Hide Statuses</label>
+          <div className="flex flex-wrap gap-1">
+            {(['Hospital', 'Jail', 'Traveling', 'Fallen', 'Abroad'] as const).map((status) => (
+              <label key={status} className="flex items-center gap-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[10px] cursor-pointer hover:border-slate-600">
+                <input
+                  type="checkbox"
+                  checked={filters.hiddenStatuses.includes(status)}
+                  onChange={(e) => {
+                    const hiddenStatuses = e.target.checked
+                      ? [...filters.hiddenStatuses, status]
+                      : filters.hiddenStatuses.filter((s) => s !== status);
+                    onFilterChange({ hiddenStatuses });
+                  }}
+                  className="accent-red-500"
+                />
+                {status}
+              </label>
+            ))}
+          </div>
         </div>
 
         {/* Sort By Selector */}

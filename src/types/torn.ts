@@ -107,7 +107,9 @@ export interface FilterOptions {
   minLevel: number;
   maxLevel: number;
   difficultyFilter: DifficultyLevel | 'ALL';
-  statusFilter: 'ALL' | 'OKAY_ONLY' | 'INCLUDE_HOSPITAL';
+  statusFilter: 'ALL' | 'OKAY_ONLY' | 'INCLUDE_HOSPITAL'; // TODO: deprecate
+  hiddenStatuses: ('Hospital' | 'Jail' | 'Traveling' | 'Fallen' | 'Abroad')[];
+
   searchQuery: string;
   sortBy: 'DAYS_OFFLINE' | 'LEVEL' | 'EST_STATS' | 'DIFFICULTY' | 'FAIR_FIGHT';
   sortOrder: 'asc' | 'desc';
