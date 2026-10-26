@@ -4,6 +4,7 @@ import { BattleStats, InactiveTarget, PlayerProfile } from '../types/torn';
 import { scanFactionMembers } from '../services/tornApi';
 import { PRESET_INACTIVE_FACTIONS } from '../data/inactivePresets';
 import { calculateDaysOffline, calculateFFScouterEstimate } from '../utils/ffscouter';
+import { safeFetchJson } from '../utils/apiClient';
 
 interface FactionScannerModalProps {
   apiKey: string;
@@ -70,8 +71,11 @@ export const FactionScannerModal: React.FC<FactionScannerModalProps> = ({
     setSuccessMsg('');
 
     try {
-      const res = await fetch(`/api/torn/scan-range?startId=${start}&count=15&key=${encodeURIComponent(apiKey)}`);
-      const data = await res.json();
+      const result = await safeFetchJson<any>(`/api/torn/scan-range?startId=${start}&count=15&key=${encodeURIComponent(apiKey)}`);
+      if (!result.ok || !result.data) {
+        throw new Error(result.error || 'Failed to scan ID range');
+      }
+      const data = result.data;
 
       if (data.error || !data.users) {
         throw new Error(data.error || 'Failed to scan ID range');

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Sparkles, Loader2, Crosshair, AlertTriangle, RefreshCw } from 'lucide-react';
 import { BattleStats, InactiveTarget, PlayerProfile } from '../types/torn';
+import { safeFetchJson } from '../utils/apiClient';
 
 interface AiTacticalAdvisorModalProps {
   playerProfile: PlayerProfile | null;
@@ -39,7 +40,7 @@ export const AiTacticalAdvisorModal: React.FC<AiTacticalAdvisorModalProps> = ({
           respectMult: t.ffScouter.estimatedFFMultiplier,
         }));
 
-      const res = await fetch('/api/ai/advisor', {
+      const result = await safeFetchJson<any>('/api/ai/advisor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -52,7 +53,11 @@ export const AiTacticalAdvisorModal: React.FC<AiTacticalAdvisorModalProps> = ({
         }),
       });
 
-      const data = await res.json();
+      if (!result.ok || !result.data) {
+        throw new Error(result.error || 'Failed to generate tactical advice');
+      }
+
+      const data = result.data;
       if (data.error) {
         throw new Error(data.error);
       }

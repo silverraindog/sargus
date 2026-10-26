@@ -29,7 +29,7 @@ export interface PlayerProfile {
   status: {
     description: string;
     details: string;
-    state: 'Okay' | 'Hospital' | 'Jail' | 'Traveling' | 'Fallen';
+    state: 'Okay' | 'Hospital' | 'Jail' | 'Traveling' | 'Fallen' | 'Abroad';
     until: number;
   };
   battleStats?: BattleStats;
@@ -48,6 +48,13 @@ export interface PlayerProfile {
     intelligence: number;
     endurance: number;
   };
+  // XP Progress fields
+  currentXp?: number;
+  xpRequired?: number;
+  levelProgress?: number; // 0 to 100 percentage
+  current_xp?: number;
+  next_level_xp?: number;
+  xp_required?: number;
 }
 
 export interface FFScouterEstimate {
@@ -77,6 +84,7 @@ export interface InactiveTarget extends PlayerProfile {
   notes?: string;
   isBookmarked?: boolean;
   lastAttackedTimestamp?: number;
+  country?: string; // Target player's country / location (e.g. 'Torn', 'Canada', 'Mexico')
 }
 
 export interface AttackHistoryItem {

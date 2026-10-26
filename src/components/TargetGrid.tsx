@@ -1,7 +1,7 @@
 import React from 'react';
 import { ExternalLink, Swords, Bookmark, Copy, Check, ShieldAlert, Award, Clock } from 'lucide-react';
 import { InactiveTarget } from '../types/torn';
-import { formatStatNumber, getDifficultyBadgeStyle } from '../utils/ffscouter';
+import { formatStatNumber, getDifficultyBadgeStyle, getCountryFlag } from '../utils/ffscouter';
 
 interface TargetGridProps {
   targets: InactiveTarget[];
@@ -30,6 +30,9 @@ export const TargetGrid: React.FC<TargetGridProps> = ({
       {targets.map((target) => {
         const diffStyle = getDifficultyBadgeStyle(target.ffScouter.difficulty);
         const ps = target.personalstats || {};
+        const country = target.country || 'Torn';
+        const flag = getCountryFlag(country);
+        const isAbroad = target.status.state === 'Abroad' || country.toLowerCase() !== 'torn';
 
         return (
           <div
@@ -57,9 +60,21 @@ export const TargetGrid: React.FC<TargetGridProps> = ({
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
                     </h3>
-                    <p className="text-xs text-slate-400 font-mono">
-                      ID: {target.player_id} · Age: {target.age} days
-                    </p>
+                    <div className="flex items-center gap-2 text-xs text-slate-400 font-mono mt-0.5">
+                      <span>ID: {target.player_id}</span>
+                      <span>·</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded text-[10px] inline-flex items-center gap-1 border ${
+                          isAbroad
+                            ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                            : 'bg-slate-800 text-slate-300 border-slate-700'
+                        }`}
+                        title={isAbroad ? `Abroad in ${country}` : 'In Torn City'}
+                      >
+                        <span>{flag}</span>
+                        <span>{country}</span>
+                      </span>
+                    </div>
                   </div>
                 </div>
 

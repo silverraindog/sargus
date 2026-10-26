@@ -1,7 +1,7 @@
 import React from 'react';
-import { ExternalLink, Swords, Bookmark, Copy, Check, Info, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { ExternalLink, Swords, Bookmark, Copy, Check, Info, AlertTriangle, ShieldCheck, MapPin } from 'lucide-react';
 import { InactiveTarget } from '../types/torn';
-import { formatStatNumber, getDifficultyBadgeStyle } from '../utils/ffscouter';
+import { formatStatNumber, getDifficultyBadgeStyle, getCountryFlag } from '../utils/ffscouter';
 
 interface TargetTableProps {
   targets: InactiveTarget[];
@@ -44,7 +44,7 @@ export const TargetTable: React.FC<TargetTableProps> = ({
           <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 uppercase tracking-wider text-[11px]">
             <tr>
               <th className="py-3.5 px-4 font-semibold">Target Player</th>
-              <th className="py-3.5 px-3 font-semibold">Status &amp; Faction</th>
+              <th className="py-3.5 px-3 font-semibold">Status &amp; Location</th>
               <th className="py-3.5 px-3 font-semibold">Offline Time</th>
               <th className="py-3.5 px-3 font-semibold">Est. Battle Stats</th>
               <th className="py-3.5 px-3 font-semibold">FFScouter Difficulty</th>
@@ -57,6 +57,9 @@ export const TargetTable: React.FC<TargetTableProps> = ({
               const isHospital = target.status.state === 'Hospital';
               const isJail = target.status.state === 'Jail';
               const isTraveling = target.status.state === 'Traveling';
+              const country = target.country || 'Torn';
+              const flag = getCountryFlag(country);
+              const isAbroad = target.status.state === 'Abroad' || country.toLowerCase() !== 'torn';
 
               return (
                 <tr
@@ -106,31 +109,51 @@ export const TargetTable: React.FC<TargetTableProps> = ({
                     </div>
                   </td>
 
-                  {/* Status & Faction */}
+                  {/* Status & Location Column */}
                   <td className="py-3 px-3">
-                    <div>
-                      {isHospital && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950/80 text-rose-400 border border-rose-800/80 inline-block mb-1">
-                          HOSPITAL
-                        </span>
-                      )}
-                      {isJail && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/80 text-amber-400 border border-amber-800/80 inline-block mb-1">
-                          JAIL
-                        </span>
-                      )}
-                      {isTraveling && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950/80 text-blue-400 border border-blue-800/80 inline-block mb-1">
-                          TRAVELING
-                        </span>
-                      )}
-                      {!isHospital && !isJail && !isTraveling && (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 inline-block mb-1">
-                          OKAY
-                        </span>
-                      )}
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {isHospital && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950/80 text-rose-400 border border-rose-800/80">
+                            HOSPITAL
+                          </span>
+                        )}
+                        {isJail && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/80 text-amber-400 border border-amber-800/80">
+                            JAIL
+                          </span>
+                        )}
+                        {isTraveling && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950/80 text-blue-400 border border-blue-800/80">
+                            TRAVELING
+                          </span>
+                        )}
+                        {isAbroad && !isTraveling && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-950/80 text-sky-400 border border-sky-800/80">
+                            ABROAD
+                          </span>
+                        )}
+                        {!isHospital && !isJail && !isTraveling && !isAbroad && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-800/80">
+                            OKAY
+                          </span>
+                        )}
 
-                      <div className="text-slate-400 text-[11px] truncate max-w-[140px]">
+                        {/* Location / Country Tag */}
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1 border ${
+                            isAbroad
+                              ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                              : 'bg-slate-800/80 text-slate-300 border-slate-700/80'
+                          }`}
+                          title={isAbroad ? `Abroad in ${country} (Cannot attack from Torn)` : 'In Torn City'}
+                        >
+                          <span>{flag}</span>
+                          <span>{country}</span>
+                        </span>
+                      </div>
+
+                      <div className="text-slate-400 text-[11px] truncate max-w-[150px]">
                         {target.faction ? target.faction.faction_name : 'No Faction'}
                       </div>
                     </div>

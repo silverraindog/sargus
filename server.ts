@@ -40,24 +40,35 @@ interface TargetEntry {
     until: number;
   };
   personalstats?: any;
+  country?: string;
   discoveredTimestamp: number;
 }
 
-// Read discovered targets from persistent file DB
+// In-memory cache for discovered targets to avoid disk I/O bottlenecks
+let inMemoryDbTargets: TargetEntry[] | null = null;
+
+// Read discovered targets from persistent file DB (cached in memory)
 function readDbTargets(): TargetEntry[] {
+  if (inMemoryDbTargets !== null) {
+    return inMemoryDbTargets;
+  }
   try {
     if (fs.existsSync(DB_FILE_PATH)) {
       const content = fs.readFileSync(DB_FILE_PATH, 'utf-8');
-      return JSON.parse(content);
+      const parsed = JSON.parse(content);
+      inMemoryDbTargets = Array.isArray(parsed) ? parsed : [];
+      return inMemoryDbTargets;
     }
   } catch (e) {
     console.error('Failed to read targets DB:', e);
   }
-  return [];
+  inMemoryDbTargets = [];
+  return inMemoryDbTargets;
 }
 
-// Write discovered targets to persistent file DB
+// Write discovered targets to persistent file DB and update cache
 function writeDbTargets(targets: TargetEntry[]) {
+  inMemoryDbTargets = targets;
   try {
     fs.writeFileSync(DB_FILE_PATH, JSON.stringify(targets, null, 2), 'utf-8');
   } catch (e) {
@@ -332,6 +343,27 @@ function validateBatchTargets(
       continue;
     }
 
+    // Extract country/location if present
+    let country = 'Torn';
+    if (raw.country && typeof raw.country === 'string') {
+      country = raw.country.trim();
+    } else if (raw.travel?.destination && typeof raw.travel.destination === 'string') {
+      country = raw.travel.destination.trim();
+    } else {
+      const desc = (raw.status?.description || '').toLowerCase();
+      const det = (raw.status?.details || '').trim();
+      const known = ['Argentina', 'Canada', 'Cayman Islands', 'China', 'Hawaii', 'Japan', 'Mexico', 'South Africa', 'Switzerland', 'UAE', 'United Kingdom'];
+      for (const k of known) {
+        if (desc.includes(k.toLowerCase()) || det.toLowerCase().includes(k.toLowerCase())) {
+          country = k;
+          break;
+        }
+      }
+      if (country === 'Torn' && raw.status?.state === 'Abroad' && det) {
+        country = det;
+      }
+    }
+
     // 6. Passed all validations - construct sanitized entry
     const validatedEntry: TargetEntry = {
       player_id: pid,
@@ -352,6 +384,7 @@ function validateBatchTargets(
         until: Number(raw.status?.until) || 0,
       },
       personalstats: raw.personalstats || {},
+      country,
       discoveredTimestamp: Date.now(),
     };
 
@@ -625,13 +658,13 @@ function startCrawlerLoop() {
 }
 
 // API Endpoint to get all targets from persistent file DB
-app.get('/api/torn/db-targets', (req, res) => {
+app.get(['/api/torn/db-targets', '/api/db-targets'], (req, res) => {
   const targets = readDbTargets();
   return res.json({ targets, totalCount: targets.length });
 });
 
 // API Endpoint to get Crawler Status
-app.get('/api/torn/crawler-status', (req, res) => {
+app.get(['/api/torn/crawler-status', '/api/crawler-status', '/api/crawler/status'], (req, res) => {
   const reqKey = (req.query.key as string) || (req.headers['x-torn-key'] as string);
   if (reqKey && (!crawlerApiKey || crawlerApiKey !== reqKey)) {
     crawlerApiKey = reqKey;
@@ -682,7 +715,7 @@ app.get('/api/torn/crawler-status', (req, res) => {
 });
 
 // API Endpoint to Toggle / Update Crawler Config
-app.post('/api/torn/crawler-toggle', (req, res) => {
+app.post(['/api/torn/crawler-toggle', '/api/crawler-toggle'], (req, res) => {
   const { enabled, apiKey, startId } = req.body;
 
   if (enabled !== undefined) crawlerEnabled = Boolean(enabled);
@@ -712,7 +745,7 @@ app.post('/api/torn/crawler-toggle', (req, res) => {
 });
 
 // API Endpoint to Manually Jump Crawler ID Forward (e.g. +200, +500, +1000)
-app.post('/api/torn/crawler-jump', (req, res) => {
+app.post(['/api/torn/crawler-jump', '/api/crawler-jump'], (req, res) => {
   const { step, targetId } = req.body || {};
   let newId = crawlerCurrentId;
 
@@ -750,7 +783,7 @@ app.post('/api/torn/crawler-jump', (req, res) => {
 });
 
 // API Endpoint to Force Scan Cycle Immediately
-app.post('/api/torn/crawler-scan-now', async (req, res) => {
+app.post(['/api/torn/crawler-scan-now', '/api/crawler-scan-now'], async (req, res) => {
   const { apiKey, startId } = req.body || {};
 
   if (apiKey) crawlerApiKey = apiKey;
@@ -775,7 +808,7 @@ app.post('/api/torn/crawler-scan-now', async (req, res) => {
 });
 
 // Proxy endpoint for Torn API User Profile
-app.get('/api/torn/user', async (req, res) => {
+app.get(['/api/torn/user', '/api/user'], async (req, res) => {
   try {
     const apiKey = (req.query.key as string) || (req.headers['x-torn-key'] as string);
     const userId = (req.query.id as string) || '';
@@ -814,7 +847,7 @@ app.get('/api/torn/user', async (req, res) => {
 });
 
 // Proxy endpoint for Faction Members scanning
-app.get('/api/torn/faction/:factionId', async (req, res) => {
+app.get(['/api/torn/faction/:factionId', '/api/faction/:factionId'], async (req, res) => {
   try {
     const apiKey = (req.query.key as string) || (req.headers['x-torn-key'] as string);
     const { factionId } = req.params;
@@ -846,7 +879,7 @@ app.get('/api/torn/faction/:factionId', async (req, res) => {
 });
 
 // Batch Live User ID Range Scanner: Queries multiple User IDs live from Torn API
-app.get('/api/torn/scan-range', async (req, res) => {
+app.get(['/api/torn/scan-range', '/api/scan-range'], async (req, res) => {
   try {
     const apiKey = (req.query.key as string) || (req.headers['x-torn-key'] as string);
     const startId = parseInt((req.query.startId as string) || '180000', 10);
@@ -929,6 +962,20 @@ Keep response brief, formatted in bullet points with tactical tone.`;
 });
 
 async function startServer() {
+  // Ensure any unmatched API route returns JSON instead of falling through to Vite SPA HTML
+  app.all('/api/*', (req, res) => {
+    return res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
+  });
+
+  // Global API error handler ensuring JSON responses
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (req.path.startsWith('/api')) {
+      console.error('Unhandled API error:', err);
+      return res.status(500).json({ error: err?.message || 'Internal Server Error' });
+    }
+    next(err);
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },

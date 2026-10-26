@@ -92,6 +92,7 @@ export function getInactivePresets(playerStats: any): InactiveTarget[] {
       ...profileData,
       daysOffline: raw.daysAgo,
       ffScouter,
+      country: 'Torn',
       attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${raw.player_id}`,
       profileUrl: `https://www.torn.com/profiles.php?XID=${raw.player_id}`,
     };

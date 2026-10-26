@@ -19,7 +19,8 @@ import { AutoCrawlerWidget } from './components/AutoCrawlerWidget';
 
 import { AttackHistoryItem, BattleStats, FilterOptions, InactiveTarget, PlayerProfile } from './types/torn';
 import { clearStoredApiKey, fetchSelfProfile, getStoredApiKey, loadInitialTargets, setStoredApiKey } from './services/tornApi';
-import { calculateDaysOffline, calculateFFScouterEstimate } from './utils/ffscouter';
+import { calculateDaysOffline, calculateFFScouterEstimate, extractTargetCountry } from './utils/ffscouter';
+import { safeFetchJson } from './utils/apiClient';
 import { Key, ShieldAlert } from 'lucide-react';
 
 const BOOKMARKS_STORAGE_KEY = 'torn_scouter_bookmarks';
@@ -42,21 +43,27 @@ export default function App() {
   const [nextScanStartId, setNextScanStartId] = useState<number>(185000);
   const [isScanningLive, setIsScanningLive] = useState<boolean>(false);
 
-  // Auto Refresh state
+  // Auto Refresh state (default 30s, minimum 15s when enabled to respect Cloud Run rate limits)
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(() => {
     try {
       const saved = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
-      return saved !== null ? parseInt(saved, 10) : 10;
+      if (saved !== null) {
+        const val = parseInt(saved, 10);
+        if (val === 0) return 0; // Off
+        return Math.max(15, val); // Clamp to at least 15s
+      }
+      return 30; // default 30s
     } catch {
-      return 10;
+      return 30;
     }
   });
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(Date.now());
 
   const handleAutoRefreshIntervalChange = (seconds: number) => {
-    setAutoRefreshInterval(seconds);
-    localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, seconds.toString());
+    const sanitized = seconds === 0 ? 0 : Math.max(15, seconds);
+    setAutoRefreshInterval(sanitized);
+    localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, sanitized.toString());
   };
 
   const [bookmarkedIds, setBookmarkedIds] = useState<number[]>(() => {
@@ -156,11 +163,11 @@ export default function App() {
   // Fetch targets stored in server's persistent file database
   const fetchDbTargets = async () => {
     try {
-      const res = await fetch('/api/torn/db-targets');
-      const data = await res.json();
-      if (data.targets && Array.isArray(data.targets)) {
-        const parsedDbTargets: InactiveTarget[] = data.targets.map((u: any) => {
+      const result = await safeFetchJson<{ targets: any[]; totalCount: number }>('/api/torn/db-targets');
+      if (result.ok && result.data?.targets && Array.isArray(result.data.targets)) {
+        const parsedDbTargets: InactiveTarget[] = result.data.targets.map((u: any) => {
           const daysOffline = calculateDaysOffline(u.last_action || { relative: '0 days' });
+          const country = extractTargetCountry(u);
           const rawProfile: Partial<PlayerProfile> = {
             player_id: u.player_id,
             name: u.name || `User_${u.player_id}`,
@@ -178,6 +185,7 @@ export default function App() {
             ...rawProfile,
             daysOffline,
             ffScouter,
+            country,
             attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${u.player_id}`,
             profileUrl: `https://www.torn.com/profiles.php?XID=${u.player_id}`,
           } as InactiveTarget;
@@ -185,24 +193,24 @@ export default function App() {
 
         handleAddScannedTargets(parsedDbTargets);
       }
-    } catch (e) {
-      console.error('Failed to load DB targets:', e);
+    } catch {
+      // Handled cleanly by safeFetchJson
     }
   };
 
-  // Manual Global Refresh
-  const handleManualRefresh = async () => {
+  // Global Refresh (manual click updates profile too, periodic auto-timer updates DB targets)
+  const handleManualRefresh = async (includeProfile = true) => {
     setIsRefreshing(true);
     try {
       await fetchDbTargets();
-      if (apiKey) {
+      if (includeProfile && apiKey) {
         const { profile, battleStats, error } = await fetchSelfProfile(apiKey);
         if (profile) setPlayerProfile(profile);
         if (battleStats) setPlayerStats(battleStats);
         if (error) setProfileError(error);
       }
-    } catch (err) {
-      console.error('Manual refresh error:', err);
+    } catch {
+      // Handled cleanly
     } finally {
       setLastRefreshedAt(Date.now());
       setIsRefreshing(false);
@@ -214,7 +222,8 @@ export default function App() {
     if (autoRefreshInterval <= 0) return;
 
     const timer = setInterval(() => {
-      handleManualRefresh();
+      // On periodic tick, only refresh DB targets to prevent rate-limiting Torn user profile
+      handleManualRefresh(false);
     }, autoRefreshInterval * 1000);
 
     return () => clearInterval(timer);
@@ -257,12 +266,11 @@ export default function App() {
 
     setIsScanningLive(true);
     try {
-      const res = await fetch(`/api/torn/scan-range?startId=${nextScanStartId}&count=20&key=${encodeURIComponent(apiKey)}`);
-      const data = await res.json();
-
-      if (data.users && Array.isArray(data.users)) {
-        const foundTargets: InactiveTarget[] = data.users.map((u: any) => {
+      const result = await safeFetchJson<any>(`/api/torn/scan-range?startId=${nextScanStartId}&count=20&key=${encodeURIComponent(apiKey)}`);
+      if (result.ok && result.data?.users && Array.isArray(result.data.users)) {
+        const foundTargets: InactiveTarget[] = result.data.users.map((u: any) => {
           const daysOffline = calculateDaysOffline(u.last_action || { relative: '0 days' });
+          const country = extractTargetCountry(u);
           const rawProfile: Partial<PlayerProfile> = {
             player_id: u.player_id,
             name: u.name || `User_${u.player_id}`,
@@ -280,6 +288,7 @@ export default function App() {
             ...rawProfile,
             daysOffline,
             ffScouter,
+            country,
             attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${u.player_id}`,
             profileUrl: `https://www.torn.com/profiles.php?XID=${u.player_id}`,
           } as InactiveTarget;
@@ -390,6 +399,16 @@ export default function App() {
     });
   };
 
+  // Remove multiple history items in a batch
+  const handleBatchRemoveHistoryItems = (ids: string[]) => {
+    const idSet = new Set(ids);
+    setAttackHistory((prev) => {
+      const updated = prev.filter((item) => !idSet.has(item.id));
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
   // Add or update scanned targets from faction scanner or crawler
   const handleAddScannedTargets = (scanned: InactiveTarget[]) => {
     setTargets((prev) => {
@@ -426,7 +445,8 @@ export default function App() {
           const nameMatch = target.name.toLowerCase().includes(q);
           const idMatch = target.player_id.toString().includes(q);
           const factionMatch = target.faction?.faction_name.toLowerCase().includes(q) || false;
-          if (!nameMatch && !idMatch && !factionMatch) return false;
+          const countryMatch = target.country?.toLowerCase().includes(q) || false;
+          if (!nameMatch && !idMatch && !factionMatch && !countryMatch) return false;
         }
         return true;
       })
@@ -590,6 +610,7 @@ export default function App() {
               archivedHistory={archivedHistory}
               onClearHistory={handleClearHistory}
               onRemoveItem={handleRemoveHistoryItem}
+              onBatchRemoveItems={handleBatchRemoveHistoryItems}
               onAttackAgain={handleAttackAgainFromHistory}
               onUpdateResult={handleUpdateAttackResult}
               onArchiveOldLogs={handleArchiveOldLogs}

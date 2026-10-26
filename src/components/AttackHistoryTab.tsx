@@ -27,6 +27,8 @@ import {
   Filter,
   Calendar,
   RotateCcw,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -45,6 +47,7 @@ interface AttackHistoryTabProps {
   archivedHistory: AttackHistoryItem[];
   onClearHistory: () => void;
   onRemoveItem: (id: string) => void;
+  onBatchRemoveItems?: (ids: string[]) => void;
   onAttackAgain: (item: AttackHistoryItem) => void;
   onUpdateResult: (id: string, result: 'SUCCESS' | 'FAILURE' | 'PENDING') => void;
   onArchiveOldLogs: () => { count: number; message: string };
@@ -95,6 +98,7 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
   archivedHistory,
   onClearHistory,
   onRemoveItem,
+  onBatchRemoveItems,
   onAttackAgain,
   onUpdateResult,
   onArchiveOldLogs,
@@ -103,6 +107,11 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
 }) => {
   const [showArchiveModal, setShowArchiveModal] = useState<boolean>(false);
   const [archiveBannerMsg, setArchiveBannerMsg] = useState<string | null>(null);
+
+  // Multi-Select Batch Delete State
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState<boolean>(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState<boolean>(false);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -298,6 +307,74 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // Multi-Select Handlers
+  const handleToggleMultiSelect = () => {
+    setIsMultiSelectMode((prev) => {
+      if (prev) {
+        setSelectedIds(new Set());
+        setConfirmBatchDelete(false);
+      }
+      return !prev;
+    });
+  };
+
+  const handleToggleSelectItem = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllFiltered = () => {
+    setSelectedIds(new Set(filteredHistory.map((item) => item.id)));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedIds(new Set());
+    setConfirmBatchDelete(false);
+  };
+
+  const isAllFilteredSelected =
+    filteredHistory.length > 0 &&
+    filteredHistory.every((item) => selectedIds.has(item.id));
+  const isSomeFilteredSelected =
+    filteredHistory.some((item) => selectedIds.has(item.id)) && !isAllFilteredSelected;
+
+  const handleToggleSelectAll = () => {
+    if (isAllFilteredSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        filteredHistory.forEach((item) => next.delete(item.id));
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        filteredHistory.forEach((item) => next.add(item.id));
+        return next;
+      });
+    }
+  };
+
+  const handleExecuteBatchDelete = () => {
+    const idsToDelete = Array.from(selectedIds);
+    if (idsToDelete.length === 0) return;
+
+    if (onBatchRemoveItems) {
+      onBatchRemoveItems(idsToDelete);
+    } else {
+      idsToDelete.forEach((id) => onRemoveItem(id));
+    }
+
+    setSelectedIds(new Set());
+    setConfirmBatchDelete(false);
   };
 
   if (history.length === 0 && archivedHistory.length === 0) {
@@ -673,6 +750,25 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            {/* Select Multiple Mode Toggle */}
+            <button
+              onClick={handleToggleMultiSelect}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-mono flex items-center gap-1.5 transition-all shadow-sm ${
+                isMultiSelectMode
+                  ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold ring-1 ring-amber-500/40'
+                  : 'bg-slate-950 hover:bg-slate-800 border-slate-800 text-slate-300'
+              }`}
+              title={isMultiSelectMode ? 'Exit select multiple mode' : 'Toggle checkboxes to delete multiple attack logs in batches'}
+            >
+              <CheckSquare className="w-3.5 h-3.5 text-amber-400" />
+              <span>{isMultiSelectMode ? 'Exit Selection' : 'Select Multiple'}</span>
+              {isMultiSelectMode && selectedIds.size > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950">
+                  {selectedIds.size}
+                </span>
+              )}
+            </button>
+
             {/* Archive Old Logs (>30d) Utility Button */}
             <button
               onClick={handleTriggerArchive}
@@ -795,6 +891,88 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
           </div>
         </div>
 
+        {/* Batch Selection Action Bar */}
+        {isMultiSelectMode && (
+          <div className="p-3 bg-amber-950/30 border-b border-amber-800/60 flex flex-wrap items-center justify-between gap-3 text-xs font-mono animate-in fade-in duration-150">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-amber-300 font-bold">
+                <CheckSquare className="w-4 h-4 text-amber-400" />
+                <span>
+                  {selectedIds.size} of {filteredHistory.length} selected
+                </span>
+              </div>
+
+              <div className="h-4 w-px bg-amber-800/60 hidden sm:block" />
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSelectAllFiltered}
+                  disabled={filteredHistory.length === 0}
+                  className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-amber-800/40 text-amber-200 text-[11px] font-semibold transition-colors disabled:opacity-40"
+                >
+                  Select All Filtered ({filteredHistory.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeselectAll}
+                  disabled={selectedIds.size === 0}
+                  className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 text-[11px] transition-colors disabled:opacity-40"
+                >
+                  Deselect All
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {confirmBatchDelete ? (
+                <div className="flex items-center gap-2 bg-rose-950 border border-rose-700 px-3 py-1 rounded-lg">
+                  <span className="text-[11px] text-rose-200 font-bold">
+                    Delete {selectedIds.size} log{selectedIds.size === 1 ? '' : 's'}?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleExecuteBatchDelete}
+                    className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] transition-colors shadow-sm"
+                  >
+                    Confirm Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmBatchDelete(false)}
+                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmBatchDelete(true)}
+                  disabled={selectedIds.size === 0}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
+                    selectedIds.size > 0
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-500 shadow-md shadow-rose-950/60 cursor-pointer'
+                      : 'bg-slate-900 text-slate-500 border-slate-800 cursor-not-allowed opacity-50'
+                  }`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Selected ({selectedIds.size})</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleToggleMultiSelect}
+                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
+                title="Exit selection mode"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Table View */}
         {history.length === 0 ? (
           <div className="p-8 text-center text-slate-400 font-mono text-xs">
@@ -823,6 +1001,26 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
             <table className="w-full text-left text-xs font-mono">
               <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 uppercase tracking-wider text-[11px]">
                 <tr>
+                  {isMultiSelectMode && (
+                    <th className="w-12 py-3.5 px-3 text-center">
+                      <button
+                        type="button"
+                        onClick={handleToggleSelectAll}
+                        className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                        title={isAllFilteredSelected ? 'Deselect all filtered' : 'Select all filtered'}
+                      >
+                        {isAllFilteredSelected ? (
+                          <CheckSquare className="w-4 h-4 text-amber-400" />
+                        ) : isSomeFilteredSelected ? (
+                          <div className="w-4 h-4 rounded border border-amber-400 bg-amber-500/30 flex items-center justify-center">
+                            <div className="w-2 h-0.5 bg-amber-400" />
+                          </div>
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-600" />
+                        )}
+                      </button>
+                    </th>
+                  )}
                   <th className="py-3.5 px-4 font-semibold">Attacked Target</th>
                   <th className="py-3.5 px-3 font-semibold">Timestamp</th>
                   <th className="py-3.5 px-3 font-semibold">Est. Battle Stats</th>
@@ -835,9 +1033,38 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
                 {filteredHistory.map((item) => {
                   const diffStyle = getDifficultyBadgeStyle(item.difficulty);
                   const currentResult = item.result || 'PENDING';
+                  const isSelected = selectedIds.has(item.id);
 
                   return (
-                    <tr key={item.id} className="hover:bg-slate-800/50 transition-colors group">
+                    <tr
+                      key={item.id}
+                      onClick={isMultiSelectMode ? () => handleToggleSelectItem(item.id) : undefined}
+                      className={`transition-colors group ${
+                        isMultiSelectMode ? 'cursor-pointer' : ''
+                      } ${
+                        isSelected
+                          ? 'bg-amber-950/25 border-l-2 border-l-amber-500 hover:bg-amber-950/35'
+                          : 'hover:bg-slate-800/50'
+                      }`}
+                    >
+                      {/* Checkbox column in multi-select mode */}
+                      {isMultiSelectMode && (
+                        <td className="w-12 py-3.5 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSelectItem(item.id)}
+                            className="p-1 rounded hover:bg-slate-800 transition-colors"
+                            title={isSelected ? 'Deselect' : 'Select'}
+                          >
+                            {isSelected ? (
+                              <CheckSquare className="w-4 h-4 text-amber-400" />
+                            ) : (
+                              <Square className="w-4 h-4 text-slate-600 hover:text-slate-400" />
+                            )}
+                          </button>
+                        </td>
+                      )}
+
                       {/* Target info */}
                       <td className="py-3.5 px-4">
                         <div className="flex items-center gap-3">
@@ -851,6 +1078,7 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
                                 href={`https://www.torn.com/profiles.php?XID=${item.targetId}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
                                 className="text-slate-500 hover:text-slate-300"
                               >
                                 <ExternalLink className="w-3 h-3" />
@@ -893,7 +1121,7 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
                       </td>
 
                       {/* Success / Failure Result Outcome Toggle */}
-                      <td className="py-3.5 px-3">
+                      <td className="py-3.5 px-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center gap-1 p-0.5 bg-slate-950 rounded-lg border border-slate-800 inline-flex">
                           <button
                             onClick={() => onUpdateResult(item.id, 'SUCCESS')}
@@ -936,7 +1164,7 @@ export const AttackHistoryTab: React.FC<AttackHistoryTabProps> = ({
                       </td>
 
                       {/* Actions */}
-                      <td className="py-3.5 px-4 text-right">
+                      <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => onRemoveItem(item.id)}

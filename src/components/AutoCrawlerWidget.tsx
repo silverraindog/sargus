@@ -14,6 +14,8 @@ import {
   ArrowRight,
 } from 'lucide-react';
 
+import { safeFetchJson } from '../utils/apiClient';
+
 interface AutoCrawlerWidgetProps {
   apiKey: string;
   onDbTargetsUpdated: () => void;
@@ -61,15 +63,23 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
     skipReason: '',
   });
 
-  // Fetch status from server
+  // Fetch status from server using safeFetchJson
   const fetchStatus = async () => {
     try {
       const url = apiKey
         ? `/api/torn/crawler-status?key=${encodeURIComponent(apiKey)}`
         : '/api/torn/crawler-status';
-      const res = await fetch(url);
-      const data = await res.json();
+      const result = await safeFetchJson<any>(url);
 
+      if (!result.ok || !result.data) {
+        if (result.isRateLimited) {
+          // Throttled by Cloud Run / proxy, wait quietly
+          return;
+        }
+        return;
+      }
+
+      const data = result.data;
       setEnabled(data.enabled);
       setCurrentId(data.currentId);
       if (data.totalInDb !== undefined) {
@@ -91,15 +101,15 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
       if (data.liveScan) {
         setLiveScan(data.liveScan);
       }
-    } catch (e) {
-      console.error('Failed to fetch crawler status:', e);
+    } catch {
+      // Ignore network errors gracefully
     }
   };
 
   useEffect(() => {
     fetchStatus();
-    // Fast polling (1.2s) while actively scanning to make progress bar fluid; 4s when active, 8s when paused
-    const pollInterval = isScanning ? 1200 : enabled ? 4000 : 8000;
+    // Moderate polling: 3.5s while actively scanning, 6s when active, 12s when paused to avoid rate limits
+    const pollInterval = isScanning ? 3500 : enabled ? 6000 : 12000;
     const interval = setInterval(fetchStatus, pollInterval);
     return () => clearInterval(interval);
   }, [apiKey, isScanning, enabled]);
@@ -116,7 +126,7 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
     setMsg('');
 
     try {
-      const res = await fetch('/api/torn/crawler-toggle', {
+      const result = await safeFetchJson<any>('/api/torn/crawler-toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -126,9 +136,14 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
         }),
       });
 
-      const data = await res.json();
+      if (!result.ok || !result.data) {
+        setMsg(result.error || 'Failed to toggle crawler');
+        return;
+      }
+
+      const data = result.data;
       setEnabled(data.enabled);
-      setMsg(data.message);
+      setMsg(data.message || (data.enabled ? 'Crawler started' : 'Crawler paused'));
       fetchStatus();
       onDbTargetsUpdated();
     } catch (e: any) {
@@ -148,7 +163,7 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
     setMsg('');
 
     try {
-      const res = await fetch('/api/torn/crawler-scan-now', {
+      const result = await safeFetchJson<any>('/api/torn/crawler-scan-now', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -157,7 +172,12 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
         }),
       });
 
-      const data = await res.json();
+      if (!result.ok || !result.data) {
+        setMsg(result.error || 'Failed to run manual scan');
+        return;
+      }
+
+      const data = result.data;
       if (data.success) {
         setCurrentId(data.currentId);
         setTotalInDb(data.totalInDb);
@@ -178,12 +198,16 @@ export const AutoCrawlerWidget: React.FC<AutoCrawlerWidgetProps> = ({ apiKey, on
     setLoading(true);
     setMsg('');
     try {
-      const res = await fetch('/api/torn/crawler-jump', {
+      const result = await safeFetchJson<any>('/api/torn/crawler-jump', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ step }),
       });
-      const data = await res.json();
+      if (!result.ok || !result.data) {
+        setMsg(result.error || 'Failed to jump ID range');
+        return;
+      }
+      const data = result.data;
       if (data.success) {
         setCurrentId(data.currentId);
         if (data.message) setStatusMsg(data.message);

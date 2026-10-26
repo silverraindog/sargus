@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { X, Swords, ExternalLink, Bookmark, Clock, Shield, Award, Calculator, Check, Copy } from 'lucide-react';
+import { X, Swords, ExternalLink, Bookmark, Clock, Shield, Award, Calculator, Check, Copy, MapPin, Globe } from 'lucide-react';
 import { InactiveTarget } from '../types/torn';
-import { formatStatNumber, getDifficultyBadgeStyle } from '../utils/ffscouter';
+import { formatStatNumber, getDifficultyBadgeStyle, getCountryFlag } from '../utils/ffscouter';
 
 interface TargetDetailModalProps {
   target: InactiveTarget | null;
@@ -24,6 +24,11 @@ export const TargetDetailModal: React.FC<TargetDetailModalProps> = ({
   const diffStyle = getDifficultyBadgeStyle(target.ffScouter.difficulty);
   const ps = target.personalstats || {};
   const bd = target.ffScouter.breakdown;
+
+  const country = target.country || 'Torn';
+  const flag = getCountryFlag(country);
+  const isAbroad = target.status.state === 'Abroad' || country.toLowerCase() !== 'torn';
+  const isTraveling = target.status.state === 'Traveling';
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(target.attackUrl);
@@ -66,9 +71,22 @@ export const TargetDetailModal: React.FC<TargetDetailModalProps> = ({
                   <ExternalLink className="w-4 h-4" />
                 </a>
               </div>
-              <p className="text-xs text-slate-400 font-mono">
-                ID: {target.player_id} · Age: {target.age} days · Rank: {target.rank}
-              </p>
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                <p className="text-xs text-slate-400 font-mono">
+                  ID: {target.player_id} · Age: {target.age} days · Rank: {target.rank}
+                </p>
+                <span
+                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold inline-flex items-center gap-1 border ${
+                    isAbroad
+                      ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                      : 'bg-slate-800 text-slate-300 border-slate-700'
+                  }`}
+                  title={isAbroad ? `Abroad in ${country}` : 'In Torn City'}
+                >
+                  <span>{flag}</span>
+                  <span>{country} {isAbroad ? '(Abroad)' : '(In City)'}</span>
+                </span>
+              </div>
             </div>
           </div>
 
@@ -82,8 +100,46 @@ export const TargetDetailModal: React.FC<TargetDetailModalProps> = ({
           </button>
         </div>
 
+        {/* Location & Tactical Status Banner */}
+        <div className={`my-4 p-3.5 rounded-xl border flex items-center justify-between gap-4 font-mono text-xs ${
+          isAbroad
+            ? 'bg-sky-950/40 border-sky-800/80 text-sky-200'
+            : isTraveling
+            ? 'bg-blue-950/40 border-blue-800/80 text-blue-200'
+            : 'bg-slate-950/70 border-slate-800 text-slate-300'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-700/80 flex items-center justify-center text-lg shrink-0">
+              {flag}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-white text-sm">
+                  Location: {country}
+                </span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] uppercase font-extrabold bg-slate-900 border border-slate-700">
+                  {target.status.state}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Status: &ldquo;{target.status.description || 'Okay'}&rdquo; {target.status.details ? `(${target.status.details})` : ''}
+              </p>
+            </div>
+          </div>
+
+          <div className="text-right text-[11px] shrink-0 hidden sm:block">
+            {isAbroad ? (
+              <span className="text-amber-400 font-bold">⚠️ Player is abroad (fly to {country})</span>
+            ) : isTraveling ? (
+              <span className="text-blue-400 font-bold">✈️ In flight</span>
+            ) : (
+              <span className="text-emerald-400 font-bold">🎯 Attackable from Torn City</span>
+            )}
+          </div>
+        </div>
+
         {/* FFScouter Summary Banner */}
-        <div className="my-5 p-4 rounded-xl bg-slate-950/90 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="mb-5 p-4 rounded-xl bg-slate-950/90 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <span className="text-[10px] text-slate-400 font-mono uppercase block">FFSCOUTER EST. STATS</span>
             <span className="text-xl font-extrabold text-emerald-400 font-mono">

@@ -9,9 +9,8 @@ export interface AutoRefreshOption {
 
 export const REFRESH_OPTIONS: AutoRefreshOption[] = [
   { label: 'Off (Manual)', value: 0 },
-  { label: 'Every 5s', value: 5, badge: 'FAST' },
-  { label: 'Every 10s', value: 10, badge: 'REC' },
-  { label: 'Every 30s', value: 30 },
+  { label: 'Every 15s', value: 15, badge: 'FAST' },
+  { label: 'Every 30s', value: 30, badge: 'REC' },
   { label: 'Every 60s (1 min)', value: 60 },
   { label: 'Every 5 mins', value: 300 },
 ];

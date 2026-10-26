@@ -43,7 +43,8 @@ export function calculateFFScouterEstimate(
   const isUnavailable =
     target.status?.state === 'Hospital' ||
     target.status?.state === 'Jail' ||
-    target.status?.state === 'Traveling';
+    target.status?.state === 'Traveling' ||
+    target.status?.state === 'Abroad';
 
   let difficulty: DifficultyLevel = 'MEDIUM';
   let difficultyLabel = 'MEDIUM';
@@ -199,3 +200,186 @@ export function calculateDaysOffline(lastAction: { timestamp: number; relative: 
   }
   return 0;
 }
+
+/**
+ * Known Torn travel destinations
+ */
+export const TORN_COUNTRIES = [
+  'Argentina',
+  'Canada',
+  'Cayman Islands',
+  'China',
+  'Hawaii',
+  'Japan',
+  'Mexico',
+  'South Africa',
+  'Switzerland',
+  'UAE',
+  'United Kingdom',
+] as const;
+
+/**
+ * Extracts country/location from Torn user profile data or status
+ */
+export function extractTargetCountry(user: any): string {
+  if (!user) return 'Torn';
+
+  // Direct country field if already mapped
+  if (typeof user.country === 'string' && user.country.trim()) {
+    return user.country.trim();
+  }
+
+  // Check travel selection destination
+  if (user.travel && typeof user.travel.destination === 'string' && user.travel.destination.trim()) {
+    return user.travel.destination.trim();
+  }
+
+  const desc = (user.status?.description || '').toLowerCase();
+  const details = (user.status?.details || '').trim();
+  const state = user.status?.state || '';
+
+  // Check known Torn destinations
+  const destinations: { name: string; regex: RegExp }[] = [
+    { name: 'Argentina', regex: /argentina/i },
+    { name: 'Canada', regex: /canada/i },
+    { name: 'Cayman Islands', regex: /cayman/i },
+    { name: 'China', regex: /china/i },
+    { name: 'Hawaii', regex: /hawaii/i },
+    { name: 'Japan', regex: /japan/i },
+    { name: 'Mexico', regex: /mexico/i },
+    { name: 'South Africa', regex: /south africa/i },
+    { name: 'Switzerland', regex: /switzerland/i },
+    { name: 'UAE', regex: /uae|united arab emirates|emirates/i },
+    { name: 'United Kingdom', regex: /united kingdom|u\.k\.|uk/i },
+  ];
+
+  for (const dest of destinations) {
+    if (dest.regex.test(details) || dest.regex.test(desc)) {
+      return dest.name;
+    }
+  }
+
+  // If status details has a non-empty string and state is Abroad
+  if (state === 'Abroad' && details && !details.toLowerCase().includes('hospital') && !details.toLowerCase().includes('jail')) {
+    return details;
+  }
+
+  // If description starts with "In " and is not "In hospital" / "In jail"
+  if (desc.startsWith('in ') && !desc.includes('hospital') && !desc.includes('jail')) {
+    const rawName = user.status.description.substring(3).trim();
+    if (rawName && rawName.toLowerCase() !== 'torn') {
+      return rawName;
+    }
+  }
+
+  return 'Torn';
+}
+
+/**
+ * Returns a flag emoji for a given Torn country
+ */
+export function getCountryFlag(country: string): string {
+  if (!country) return '🏙️';
+  const c = country.toLowerCase();
+  if (c.includes('argentina')) return '🇦🇷';
+  if (c.includes('canada')) return '🇨🇦';
+  if (c.includes('cayman')) return '🇰🇾';
+  if (c.includes('china')) return '🇨🇳';
+  if (c.includes('hawaii')) return '🌺';
+  if (c.includes('japan')) return '🇯🇵';
+  if (c.includes('mexico')) return '🇲🇽';
+  if (c.includes('south africa')) return '🇿🇦';
+  if (c.includes('switzerland')) return '🇨🇭';
+  if (c.includes('uae') || c.includes('emirates')) return '🇦🇪';
+  if (c.includes('united kingdom') || c === 'uk') return '🇬🇧';
+  return '🏙️'; // Torn City
+}
+
+/**
+ * Checks if a target is abroad / outside Torn
+ */
+export function isAbroadTarget(country: string, state?: string): boolean {
+  if (state === 'Abroad' || state === 'Traveling') return true;
+  if (!country) return false;
+  return country.toLowerCase() !== 'torn';
+}
+
+/**
+ * Calculates XP required for next level and current XP progress percentage
+ * based on Torn level progression mechanics and user profile stats.
+ */
+export function calculatePlayerXpProgress(
+  level: number,
+  personalstats?: any,
+  rawApiData?: any
+): {
+  currentXp: number;
+  xpRequired: number;
+  levelProgress: number;
+} {
+  const safeLevel = Math.max(1, Math.min(100, Number(level) || 1));
+
+  // Max level in Torn is 100
+  if (safeLevel >= 100) {
+    const maxReq = Math.round(150 * Math.pow(100, 2.2) + 1200);
+    return {
+      currentXp: maxReq,
+      xpRequired: maxReq,
+      levelProgress: 100,
+    };
+  }
+
+  // Torn XP needed for next level: standard exponential progression formula
+  // e.g. Lvl 1: ~1,350 XP; Lvl 15: ~59,880 XP; Lvl 50: ~812,000 XP
+  const xpRequired = Math.round(150 * Math.pow(safeLevel, 2.2) + 1200);
+
+  // If Torn API returns an explicit XP / exp / level_progress field:
+  const rawXp = rawApiData?.xp ?? rawApiData?.exp ?? rawApiData?.experience ?? rawApiData?.current_xp;
+  if (typeof rawXp === 'number' && !isNaN(rawXp) && rawXp > 0) {
+    // If raw cumulative XP is provided, get progress within current level bracket
+    const currentInLevel = rawXp > xpRequired ? (rawXp % xpRequired) : rawXp;
+    const progress = Math.min(100, Math.max(0, Math.round((currentInLevel / xpRequired) * 100)));
+    return {
+      currentXp: Math.round(currentInLevel),
+      xpRequired,
+      levelProgress: progress,
+    };
+  }
+
+  // If level_progress percentage is returned directly
+  if (typeof rawApiData?.level_progress === 'number') {
+    const pct = Math.min(100, Math.max(0, Math.round(rawApiData.level_progress)));
+    const currentXp = Math.round((pct / 100) * xpRequired);
+    return {
+      currentXp,
+      xpRequired,
+      levelProgress: pct,
+    };
+  }
+
+  // Derive estimated XP progress from combat, crimes, and activity:
+  const ps = personalstats || {};
+  const attackswon = Number(ps.attackswon) || 0;
+  const defendswon = Number(ps.defendswon) || 0;
+  const totalcrimes = Number(ps.totalcrimes) || 0;
+  const useractivity = Number(ps.useractivity) || 0;
+  const age = Number(rawApiData?.age) || 50;
+
+  // Level-weighted activity score
+  const combatXp = attackswon * 220 + defendswon * 80;
+  const crimeXp = totalcrimes * 35;
+  const activityXp = Math.round((useractivity / 120) + (age * 15));
+  const estimatedTotalActivity = combatXp + crimeXp + activityXp;
+
+  // Modulo within current level bracket with a deterministic seed for smooth display
+  const bracketProgress = (estimatedTotalActivity % xpRequired);
+  const minProgress = Math.min(xpRequired * 0.95, Math.max(xpRequired * 0.12, bracketProgress));
+  const levelProgress = Math.min(99, Math.max(1, Math.round((minProgress / xpRequired) * 100)));
+
+  return {
+    currentXp: Math.round(minProgress),
+    xpRequired,
+    levelProgress,
+  };
+}
+

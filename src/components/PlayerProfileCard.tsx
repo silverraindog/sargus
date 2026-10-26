@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Zap, Flame, Award, Heart, Activity, Key, AlertTriangle } from 'lucide-react';
+import { Shield, Zap, Flame, Award, Heart, Activity, Key, AlertTriangle, Sparkles, TrendingUp } from 'lucide-react';
 import { PlayerProfile, BattleStats } from '../types/torn';
 import { formatStatNumber } from '../utils/ffscouter';
 
@@ -48,6 +48,12 @@ export const PlayerProfileCard: React.FC<PlayerProfileCardProps> = ({
       </div>
     );
   }
+
+  const currentXp = profile.currentXp ?? profile.current_xp ?? 0;
+  const xpRequired = profile.xpRequired ?? profile.next_level_xp ?? profile.xp_required ?? 1000;
+  const levelProgress = profile.levelProgress ?? (xpRequired > 0 ? Math.min(100, Math.round((currentXp / xpRequired) * 100)) : 0);
+  const xpRemaining = Math.max(0, xpRequired - currentXp);
+  const isMaxLevel = profile.level >= 100;
 
   return (
     <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl text-slate-100 mb-6">
@@ -100,6 +106,43 @@ export const PlayerProfileCard: React.FC<PlayerProfileCardProps> = ({
               <span className="text-slate-200 font-bold">{formatStatNumber(battleStats.dexterity)}</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Level XP Progress Bar */}
+      <div className="py-3 border-b border-slate-800/80 font-mono">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 mb-1.5 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-amber-400 font-bold flex items-center gap-1">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              Level {profile.level} XP Progress
+            </span>
+            <span className="text-slate-600">→</span>
+            <span className="text-slate-300 font-medium">
+              {isMaxLevel ? 'Max Level Reached' : `Next: Level ${profile.level + 1}`}
+            </span>
+            <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+              {levelProgress}%
+            </span>
+          </div>
+          <div className="text-[11px] text-slate-400 flex items-center gap-2">
+            <span>
+              <strong className="text-emerald-400">{currentXp.toLocaleString()}</strong> / {xpRequired.toLocaleString()} XP
+            </span>
+            {!isMaxLevel && (
+              <span className="text-slate-500 hidden sm:inline">
+                ({xpRemaining.toLocaleString()} XP to level up)
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Progress Bar Track */}
+        <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden p-0.5 border border-slate-800/90 shadow-inner relative">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-400 shadow-md shadow-amber-500/20 transition-all duration-700 ease-out"
+            style={{ width: `${Math.max(2, Math.min(100, levelProgress))}%` }}
+          />
         </div>
       </div>
 
