@@ -12,7 +12,6 @@ import { TargetTable } from './components/TargetTable';
 import { TargetGrid } from './components/TargetGrid';
 import { TargetDetailModal } from './components/TargetDetailModal';
 import { FactionScannerModal } from './components/FactionScannerModal';
-import { AiTacticalAdvisorModal } from './components/AiTacticalAdvisorModal';
 import { BookmarksDrawer } from './components/BookmarksDrawer';
 import { AttackHistoryTab } from './components/AttackHistoryTab';
 import { AutoCrawlerWidget } from './components/AutoCrawlerWidget';
@@ -103,7 +102,7 @@ export default function App() {
     }
   });
 
-  const [activeTab, setActiveTab] = useState<'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history'>('targets');
+  const [activeTab, setActiveTab] = useState<'targets' | 'scanner' | 'bookmarks' | 'history'>('targets');
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
   // Archive logs older than 30 days
@@ -622,16 +621,7 @@ export default function App() {
             />
           )}
 
-          {/* Tab 3: AI Tactical Advisor */}
-          {activeTab === 'advisor' && (
-            <AiTacticalAdvisorModal
-              playerProfile={playerProfile}
-              playerStats={playerStats}
-              targets={targets}
-            />
-          )}
-
-          {/* Tab 4: Saved Targets Queue */}
+          {/* Tab 3: Saved Targets Queue */}
           {activeTab === 'bookmarks' && (
             <BookmarksDrawer
               bookmarkedTargets={bookmarkedTargets}
@@ -644,7 +634,7 @@ export default function App() {
             />
           )}
 
-          {/* Tab 5: Attack History Log */}
+          {/* Tab 4: Attack History Log */}
           {activeTab === 'history' && (
             <AttackHistoryTab
               history={attackHistory}

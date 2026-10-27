@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Key, Crosshair, Sparkles, Bookmark, Search, History } from 'lucide-react';
+import { Shield, Key, Crosshair, Bookmark, Search, History } from 'lucide-react';
 import { PlayerProfile, BattleStats } from '../types/torn';
 import { formatStatNumber } from '../utils/ffscouter';
 import { AutoRefreshDropdown } from './AutoRefreshDropdown';
@@ -9,8 +9,8 @@ interface HeaderProps {
   onOpenKeyModal: () => void;
   playerProfile: PlayerProfile | null;
   playerStats: BattleStats | null;
-  activeTab: 'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history';
-  setActiveTab: (tab: 'targets' | 'scanner' | 'advisor' | 'bookmarks' | 'history') => void;
+  activeTab: 'targets' | 'scanner' | 'bookmarks' | 'history';
+  setActiveTab: (tab: 'targets' | 'scanner' | 'bookmarks' | 'history') => void;
   bookmarkCount: number;
   historyCount: number;
   autoRefreshInterval: number;
@@ -77,17 +77,6 @@ export const Header: React.FC<HeaderProps> = ({
             <span>Faction Scanner</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('advisor')}
-            className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 whitespace-nowrap ${
-              activeTab === 'advisor'
-                ? 'bg-red-500/10 text-red-400 border border-red-500/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <span>AI Advisor</span>
-          </button>
 
           <button
             onClick={() => setActiveTab('bookmarks')}

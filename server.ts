@@ -1,6 +1,5 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
@@ -95,6 +94,120 @@ function getCached(key: string): any | null {
 function setCache(key: string, data: any) {
   apiCache.set(key, { data, timestamp: Date.now() });
 }
+
+// Robust Torn API Fetch Helper with headers and safe JSON/HTML handling
+interface TornApiResponse<T = any> {
+  ok: boolean;
+  status: number;
+  data?: T;
+  error?: string;
+  code?: number;
+  isHtml?: boolean;
+  isTimeout?: boolean;
+  durationMs: number;
+}
+
+const TORN_API_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 (compatible; TornScouter/2.5; +https://torn.com)',
+  'Accept': 'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+async function fetchTornApi<T = any>(
+  url: string,
+  options?: { timeoutMs?: number }
+): Promise<TornApiResponse<T>> {
+  const timeoutMs = options?.timeoutMs || 10000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startTs = Date.now();
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: TORN_API_HEADERS,
+    });
+    clearTimeout(timer);
+    const durationMs = Date.now() - startTs;
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+
+    // Check if Torn or Cloudflare returned an HTML page (Cloudflare challenge, maintenance, etc.)
+    if (trimmed.startsWith('<') || (!contentType.includes('application/json') && trimmed.includes('<html'))) {
+      let friendlyError = 'Torn City API returned an unexpected HTML response.';
+      if (trimmed.includes('Cloudflare') || trimmed.includes('Just a moment') || trimmed.includes('cf-browser-verification')) {
+        friendlyError = 'Torn API request was intercepted by Cloudflare security check. Please try again in a few moments.';
+      } else if (res.status === 429 || trimmed.toLowerCase().includes('rate limit') || trimmed.toLowerCase().includes('too many requests')) {
+        friendlyError = 'Torn API rate limit reached. Please wait a few seconds before retrying.';
+      } else if (res.status >= 500) {
+        friendlyError = `Torn API server is temporarily unavailable (HTTP ${res.status}). Torn City servers may be undergoing maintenance.`;
+      } else {
+        friendlyError = `Torn API returned HTML response (HTTP ${res.status}).`;
+      }
+
+      return {
+        ok: false,
+        status: res.status,
+        error: friendlyError,
+        isHtml: true,
+        durationMs,
+      };
+    }
+
+    // Safely parse JSON
+    let parsed: any;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      return {
+        ok: false,
+        status: res.status,
+        error: 'Invalid JSON received from Torn API',
+        durationMs,
+      };
+    }
+
+    if (parsed && parsed.error) {
+      const errCode = parsed.error.code;
+      const errMsg = parsed.error.error || 'Torn API Error';
+      return {
+        ok: false,
+        status: res.status,
+        code: errCode,
+        error: errMsg,
+        data: parsed,
+        durationMs,
+      };
+    }
+
+    return {
+      ok: res.ok,
+      status: res.status,
+      data: parsed,
+      durationMs,
+    };
+  } catch (err: any) {
+    clearTimeout(timer);
+    const elapsed = Date.now() - startTs;
+    const isTimeout =
+      err.name === 'AbortError' ||
+      err.name === 'TimeoutError' ||
+      elapsed >= (timeoutMs - 100) ||
+      (err.message && (err.message.includes('aborted') || err.message.includes('timeout')));
+
+    return {
+      ok: false,
+      status: isTimeout ? 408 : 500,
+      error: isTimeout
+        ? `Torn API request timed out after ${Math.round(elapsed / 1000)}s`
+        : err.message || 'Network error querying Torn API',
+      isTimeout,
+      durationMs: elapsed,
+    };
+  }
+}
+
 
 // File path for crawler state persistence
 const CRAWLER_CONFIG_PATH = path.join(DATA_DIR, 'crawler_config.json');
@@ -482,28 +595,20 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
         const pid = startId + batchStart + offset;
         promises.push(
           (async () => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), crawlerTimeoutMs);
-            const startTs = Date.now();
-            try {
-              const res = await fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${activeKey}`, {
-                signal: controller.signal,
-              });
-              clearTimeout(timer);
-              const data = await res.json();
-              return { pid, data, isTimeout: false, durationMs: Date.now() - startTs };
-            } catch (err: any) {
-              clearTimeout(timer);
-              const elapsed = Date.now() - startTs;
-              const isTimeout =
-                err.name === 'AbortError' ||
-                err.name === 'TimeoutError' ||
-                elapsed >= (crawlerTimeoutMs - 100) ||
-                (err.message && (err.message.includes('aborted') || err.message.includes('timeout')));
-              return { pid, error: err, isTimeout, durationMs: elapsed };
-            }
+            const apiRes = await fetchTornApi(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${activeKey}`, {
+              timeoutMs: crawlerTimeoutMs,
+            });
+            return {
+              pid,
+              data: apiRes.data,
+              error: apiRes.error ? { error: apiRes.error, code: apiRes.code } : undefined,
+              isTimeout: Boolean(apiRes.isTimeout),
+              isHtml: Boolean(apiRes.isHtml),
+              durationMs: apiRes.durationMs,
+            };
           })()
         );
+
       }
 
       const results = await Promise.all(promises);
@@ -939,19 +1044,18 @@ app.get(['/api/torn/user', '/api/user'], async (req, res) => {
       ? `https://api.torn.com/user/${userId}?selections=profile,personalstats,crimes,workstats&key=${apiKey}`
       : `https://api.torn.com/user/?selections=profile,battlestats,personalstats,workstats&key=${apiKey}`;
 
-    const response = await fetch(endpoint);
-    const data = await response.json();
+    const result = await fetchTornApi(endpoint);
 
-    if (data.error) {
-      const isNotFound = data.error.code === 6 || (data.error.error && data.error.error.includes('No user found'));
+    if (!result.ok || !result.data) {
+      const isNotFound = result.code === 6 || (result.error && result.error.includes('No user found'));
       const friendlyMsg = isNotFound
         ? 'User ID not found in Torn City. Please verify the User ID and try again.'
-        : (data.error.error || 'Torn API Error');
-      return res.status(400).json({ error: friendlyMsg, code: data.error.code });
+        : (result.error || 'Torn API Error');
+      return res.status(result.status || 400).json({ error: friendlyMsg, code: result.code });
     }
 
-    setCache(cacheKey, data);
-    return res.json(data);
+    setCache(cacheKey, result.data);
+    return res.json(result.data);
   } catch (err: any) {
     console.error('Torn User API Error:', err);
     return res.status(500).json({ error: err.message || 'Failed to query Torn API' });
@@ -975,15 +1079,14 @@ app.get(['/api/torn/faction/:factionId', '/api/faction/:factionId'], async (req,
     }
 
     const endpoint = `https://api.torn.com/faction/${factionId}?selections=basic,members&key=${apiKey}`;
-    const response = await fetch(endpoint);
-    const data = await response.json();
+    const result = await fetchTornApi(endpoint);
 
-    if (data.error) {
-      return res.status(400).json({ error: data.error.error || 'Failed to fetch faction data' });
+    if (!result.ok || !result.data) {
+      return res.status(result.status || 400).json({ error: result.error || 'Failed to fetch faction data' });
     }
 
-    setCache(cacheKey, data);
-    return res.json(data);
+    setCache(cacheKey, result.data);
+    return res.json(result.data);
   } catch (err: any) {
     console.error('Torn Faction API Error:', err);
     return res.status(500).json({ error: err.message || 'Failed to fetch faction' });
@@ -1028,54 +1131,39 @@ app.get(['/api/torn/scan-range', '/api/scan-range'], async (req, res) => {
           consecutive404s++;
         }
       } else {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), crawlerTimeoutMs);
-        const startTs = Date.now();
+        const apiRes = await fetchTornApi(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${apiKey}`, {
+          timeoutMs: crawlerTimeoutMs,
+        });
 
-        try {
-          const resp = await fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${apiKey}`, {
-            signal: controller.signal,
-          });
-          clearTimeout(timer);
-          const data = await resp.json();
+        if (apiRes.isTimeout) {
+          timedOutCount++;
+          console.warn(`[Batch Scan] ⏱️ 10s timeout fetching User ID #${pid}`);
+          // Trigger 10s timeout auto-skip
+          const jumpStep = 500;
+          registerSkipRange(pid, pid + jumpStep - 1, `10s timeout on ID #${pid} in live scanner`);
+          skippedNextId = pid + jumpStep;
+          const postCheck = bypassKnownSkipRanges(skippedNextId);
+          skippedNextId = postCheck.nextId;
+          didAutoSkip = true;
+          skipReason = `⏱️ 10-second timeout reached fetching ID #${pid}. Auto-jumped +${jumpStep} IDs to #${skippedNextId}`;
+          break;
+        }
 
-          if (data && !data.error && data.player_id) {
-            consecutive404s = 0;
-            setCache(cacheKey, data);
-            targetUsers.push(data);
-          } else if (data?.error) {
-            const errCode = data.error.code;
-            const errMsg = data.error.error || '';
-            const isInvalidId =
-              errCode === 6 ||
-              errMsg.toLowerCase().includes('incorrect id') ||
-              errMsg.toLowerCase().includes('no user found');
+        const data = apiRes.data;
+        if (data && !data.error && data.player_id) {
+          consecutive404s = 0;
+          setCache(cacheKey, data);
+          targetUsers.push(data);
+        } else if (data?.error || apiRes.error) {
+          const errCode = data?.error?.code || apiRes.code;
+          const errMsg = data?.error?.error || apiRes.error || '';
+          const isInvalidId =
+            errCode === 6 ||
+            errMsg.toLowerCase().includes('incorrect id') ||
+            errMsg.toLowerCase().includes('no user found');
 
-            if (isInvalidId) {
-              consecutive404s++;
-            }
-          }
-        } catch (fetchErr: any) {
-          clearTimeout(timer);
-          const elapsed = Date.now() - startTs;
-          const isTimeout =
-            fetchErr.name === 'AbortError' ||
-            fetchErr.name === 'TimeoutError' ||
-            elapsed >= (crawlerTimeoutMs - 100) ||
-            (fetchErr.message && (fetchErr.message.includes('aborted') || fetchErr.message.includes('timeout')));
-
-          if (isTimeout) {
-            timedOutCount++;
-            console.warn(`[Batch Scan] ⏱️ 10s timeout fetching User ID #${pid}`);
-            // Trigger 10s timeout auto-skip
-            const jumpStep = 500;
-            registerSkipRange(pid, pid + jumpStep - 1, `10s timeout on ID #${pid} in live scanner`);
-            skippedNextId = pid + jumpStep;
-            const postCheck = bypassKnownSkipRanges(skippedNextId);
-            skippedNextId = postCheck.nextId;
-            didAutoSkip = true;
-            skipReason = `⏱️ 10-second timeout reached fetching ID #${pid}. Auto-jumped +${jumpStep} IDs to #${skippedNextId}`;
-            break;
+          if (isInvalidId) {
+            consecutive404s++;
           }
         }
 
@@ -1104,45 +1192,6 @@ app.get(['/api/torn/scan-range', '/api/scan-range'], async (req, res) => {
   } catch (err: any) {
     console.error('Batch Scan Error:', err);
     return res.status(500).json({ error: 'Failed batch scan' });
-  }
-});
-
-// AI Tactical Hit Advisor endpoint using @google/genai
-app.post('/api/ai/advisor', async (req, res) => {
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(503).json({
-        advice: 'Gemini API Key is not configured. Please add GEMINI_API_KEY to process tactical recommendations.'
-      });
-    }
-
-    const { player, targets } = req.body;
-
-    const ai = new GoogleGenAI({ apiKey });
-    const prompt = `You are an expert Torn City MMORPG warfare strategist and chain target advisor.
-Player Stats: Level ${player.level || 0}, Name: ${player.name || 'Player'}, Total BS Est: ${player.totalStats || 'Unknown'}.
-
-Analyze the following top inactive targets (>30 days offline) and give 3 short, actionable tactical tips:
-Targets:
-${JSON.stringify(targets.slice(0, 5), null, 2)}
-
-Provide:
-1) Ideal attack order for maximum chain respect.
-2) Equipment or temporary item recommendation (e.g. Pepper Spray, Grenade, Tear Gas).
-3) Key warning or caution flags.
-
-Keep response brief, formatted in bullet points with tactical tone.`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-    });
-
-    return res.json({ advice: response.text });
-  } catch (err: any) {
-    console.error('AI Advisor Error:', err);
-    return res.status(500).json({ error: 'Failed to generate tactical advice' });
   }
 });
 
