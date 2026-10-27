@@ -36,8 +36,8 @@ export const Header: React.FC<HeaderProps> = ({
   lastRefreshedAt = 0,
 }) => {
   return (
-    <header className="border-b border-slate-800 bg-slate-950/90 backdrop-blur-md sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4 sm:gap-8">
+    <header className="border-b border-slate-800 bg-slate-950/90 backdrop-blur-md sticky top-0 z-40 w-full">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-16 py-2 flex items-center justify-between flex-wrap gap-2">
         {/* Zone 1: Wordmark */}
         <div className="flex items-center gap-3 shrink-0">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-rose-600 to-red-800 flex items-center justify-center shadow-lg shadow-red-950/50 border border-red-500/30">
@@ -125,7 +125,7 @@ export const Header: React.FC<HeaderProps> = ({
           />
 
           {playerProfile && playerStats ? (
-            <div className="hidden lg:flex items-center gap-3 px-3 py-1 rounded-md bg-slate-900/80 border border-slate-800 text-xs text-slate-300 font-mono">
+            <div className="hidden md:flex items-center gap-3 px-3 py-1 rounded-md bg-slate-900/80 border border-slate-800 text-xs text-slate-300 font-mono">
               <div>
                 <span className="text-slate-500">PLAYER:</span>{' '}
                 <span className="text-white font-semibold">{playerProfile.name}</span>{' '}
@@ -138,7 +138,7 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             </div>
           ) : (
-            <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-md bg-slate-900/50 border border-slate-800 text-xs text-slate-400 font-mono">
+            <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-md bg-slate-900/50 border border-slate-800 text-xs text-slate-400 font-mono">
               <span className="text-slate-500">PLAYER:</span>
               <span className="text-amber-400 font-semibold">Not Connected</span>
             </div>

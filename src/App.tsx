@@ -15,6 +15,7 @@ import { FactionScannerModal } from './components/FactionScannerModal';
 import { BookmarksDrawer } from './components/BookmarksDrawer';
 import { AttackHistoryTab } from './components/AttackHistoryTab';
 import { AutoCrawlerWidget } from './components/AutoCrawlerWidget';
+import { TargetDifficultyChart } from './components/TargetDifficultyChart';
 
 import { AttackHistoryItem, BattleStats, FilterOptions, InactiveTarget, PlayerProfile } from './types/torn';
 import { clearStoredApiKey, fetchSelfProfile, getStoredApiKey, loadInitialTargets, setStoredApiKey } from './services/tornApi';
@@ -593,6 +594,8 @@ export default function App() {
                 onScanMoreLive={handleScanMoreLive}
                 isScanningLive={isScanningLive}
               />
+
+              <TargetDifficultyChart targets={filteredTargets} />
 
               {viewMode === 'table' ? (
                 <TargetTable
