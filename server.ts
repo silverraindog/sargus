@@ -120,6 +120,10 @@ interface CrawlerConfig {
   consecutiveDeadBatches?: number;
   consecutiveIncorrectIds?: number;
   totalDeadBlocksSkipped?: number;
+  maxConsecutive404s?: number; // threshold to trigger auto-jump (default 10)
+  timeoutMs?: number; // timeout threshold per ID request in ms (default 10000 = 10s)
+  consecutiveTimeouts?: number;
+  totalTimeoutsSkipped?: number;
   skipRanges?: SkipRange[];
 }
 
@@ -145,6 +149,10 @@ function readCrawlerConfig(): CrawlerConfig {
     consecutiveDeadBatches: 0,
     consecutiveIncorrectIds: 0,
     totalDeadBlocksSkipped: 0,
+    maxConsecutive404s: 10,
+    timeoutMs: 10000, // 10 seconds timeout
+    consecutiveTimeouts: 0,
+    totalTimeoutsSkipped: 0,
     skipRanges: [],
   };
 }
@@ -173,6 +181,10 @@ let crawlerLastError = initialCrawlerConfig.lastError || '';
 let crawlerConsecutiveDeadBatches = initialCrawlerConfig.consecutiveDeadBatches || 0;
 let crawlerConsecutiveIncorrectIds = initialCrawlerConfig.consecutiveIncorrectIds || 0;
 let crawlerTotalDeadBlocksSkipped = initialCrawlerConfig.totalDeadBlocksSkipped || 0;
+let crawlerMaxConsecutive404s = initialCrawlerConfig.maxConsecutive404s || 10;
+let crawlerTimeoutMs = initialCrawlerConfig.timeoutMs || 10000; // 10-second timeout default
+let crawlerConsecutiveTimeouts = initialCrawlerConfig.consecutiveTimeouts || 0;
+let crawlerTotalTimeoutsSkipped = initialCrawlerConfig.totalTimeoutsSkipped || 0;
 let crawlerLastJumpSize = 0;
 let crawlerSkipRanges: SkipRange[] = Array.isArray(initialCrawlerConfig.skipRanges) ? initialCrawlerConfig.skipRanges : [];
 let crawlerIsScanning = false;
@@ -460,7 +472,7 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
   let autoThresholdJumped = false;
 
   try {
-    // Process in 4 batches of 5 concurrent requests to stay within rate limits and speed up execution
+    // Process in 4 batches of 5 concurrent requests with strict 10s timeout per ID
     const chunkSize = 5;
     for (let batchStart = 0; batchStart < crawlerBatchSize; batchStart += chunkSize) {
       if (autoThresholdJumped) break;
@@ -469,10 +481,28 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
       for (let offset = 0; offset < chunkSize && (batchStart + offset) < crawlerBatchSize; offset++) {
         const pid = startId + batchStart + offset;
         promises.push(
-          fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${activeKey}`)
-            .then(res => res.json())
-            .then(data => ({ pid, data }))
-            .catch(err => ({ pid, error: err }))
+          (async () => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), crawlerTimeoutMs);
+            const startTs = Date.now();
+            try {
+              const res = await fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${activeKey}`, {
+                signal: controller.signal,
+              });
+              clearTimeout(timer);
+              const data = await res.json();
+              return { pid, data, isTimeout: false, durationMs: Date.now() - startTs };
+            } catch (err: any) {
+              clearTimeout(timer);
+              const elapsed = Date.now() - startTs;
+              const isTimeout =
+                err.name === 'AbortError' ||
+                err.name === 'TimeoutError' ||
+                elapsed >= (crawlerTimeoutMs - 100) ||
+                (err.message && (err.message.includes('aborted') || err.message.includes('timeout')));
+              return { pid, error: err, isTimeout, durationMs: elapsed };
+            }
+          })()
         );
       }
 
@@ -486,6 +516,40 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
       }
 
       for (const item of results) {
+        // Condition A: 10-Second Timeout on getting ID
+        if (item.isTimeout) {
+          crawlerConsecutiveTimeouts++;
+          console.warn(`[Auto-Crawler] ⏱️ 10s timeout reached fetching User ID #${item.pid} (${item.durationMs}ms >= ${crawlerTimeoutMs}ms limit)`);
+
+          const jumpStep = 500;
+          const deadBlockStart = item.pid;
+          const deadBlockEnd = item.pid + jumpStep - 1;
+          registerSkipRange(deadBlockStart, deadBlockEnd, `10s timeout reached fetching User ID #${item.pid} (${item.durationMs}ms)`);
+          crawlerTotalDeadBlocksSkipped++;
+          crawlerTotalTimeoutsSkipped++;
+          crawlerLastJumpSize = jumpStep;
+
+          const prospectiveId = item.pid + jumpStep;
+          const postCheck = bypassKnownSkipRanges(prospectiveId);
+          crawlerCurrentId = postCheck.nextId;
+          crawlerConsecutiveIncorrectIds = 0;
+          crawlerConsecutiveDeadBatches = 0;
+          crawlerConsecutiveTimeouts = 0;
+          autoThresholdJumped = true;
+
+          crawlerLiveScan.isSkipping = true;
+          crawlerLiveScan.skipReason = `⏱️ 10-Second Timeout reached on ID #${item.pid} (${Math.round(item.durationMs / 1000)}s). Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId}!`;
+          crawlerLiveScan.jumpStep = jumpStep;
+          crawlerLiveScan.jumpTargetId = crawlerCurrentId;
+          crawlerLiveScan.lastSkipTimestamp = Date.now();
+          crawlerLiveScan.scannedCount = crawlerBatchSize;
+          crawlerLiveScan.remaining = 0;
+
+          crawlerLastStatusMessage = `⏱️ 10s timeout on ID #${item.pid}. Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId}!`;
+          console.log(`[Auto-Crawler] 10s timeout reached. Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId} to maintain crawler throughput.`);
+          break;
+        }
+
         if ('error' in item && item.error) {
           continue;
         }
@@ -508,20 +572,20 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
           } else {
             invalidIdCount++;
             crawlerConsecutiveIncorrectIds++;
-            console.warn(`[Auto-Crawler] Torn API Error on ID #${item.pid}: Incorrect ID (consecutive: ${crawlerConsecutiveIncorrectIds})`);
+            console.warn(`[Auto-Crawler] Torn API Error on ID #${item.pid}: Incorrect ID (consecutive: ${crawlerConsecutiveIncorrectIds}/${crawlerMaxConsecutive404s})`);
 
             // If getting close to threshold, enter skipping warning state
             if (crawlerConsecutiveIncorrectIds >= 5) {
               crawlerLiveScan.isSkipping = true;
-              crawlerLiveScan.skipReason = `Warning: ${crawlerConsecutiveIncorrectIds}/10 consecutive 404s encountered. Approaching dead-zone skip threshold.`;
+              crawlerLiveScan.skipReason = `Warning: ${crawlerConsecutiveIncorrectIds}/${crawlerMaxConsecutive404s} consecutive 404s encountered. Approaching auto-skip threshold.`;
             }
 
-            // Failure threshold: If more than 10 consecutive 'Incorrect ID' errors are hit, trigger automatic jump of 500 IDs
-            if (crawlerConsecutiveIncorrectIds > 10) {
+            // Condition B: Exactly 10 (or configured threshold) consecutive 'Incorrect ID' 404 errors hit -> Trigger auto-jump of 500 IDs
+            if (crawlerConsecutiveIncorrectIds >= crawlerMaxConsecutive404s) {
               const jumpStep = 500;
               const deadBlockStart = Math.max(1, item.pid - crawlerConsecutiveIncorrectIds + 1);
               const deadBlockEnd = item.pid + jumpStep - 1;
-              registerSkipRange(deadBlockStart, deadBlockEnd, `Failure threshold exceeded (>10 consecutive Incorrect IDs)`);
+              registerSkipRange(deadBlockStart, deadBlockEnd, `10 consecutive 404s reached (${crawlerConsecutiveIncorrectIds} consecutive Incorrect IDs)`);
               crawlerTotalDeadBlocksSkipped++;
               crawlerLastJumpSize = jumpStep;
 
@@ -530,19 +594,20 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
               crawlerCurrentId = postCheck.nextId;
               crawlerConsecutiveIncorrectIds = 0;
               crawlerConsecutiveDeadBatches = 0;
+              crawlerConsecutiveTimeouts = 0;
               autoThresholdJumped = true;
 
               // Mark skipping state active
               crawlerLiveScan.isSkipping = true;
-              crawlerLiveScan.skipReason = `🚨 Consecutive 404s threshold exceeded (>10 Incorrect IDs). Fast-forwarded +${jumpStep} IDs to #${crawlerCurrentId}!`;
+              crawlerLiveScan.skipReason = `🚨 10 consecutive 404s reached (${crawlerMaxConsecutive404s} Incorrect IDs). Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId}!`;
               crawlerLiveScan.jumpStep = jumpStep;
               crawlerLiveScan.jumpTargetId = crawlerCurrentId;
               crawlerLiveScan.lastSkipTimestamp = Date.now();
               crawlerLiveScan.scannedCount = crawlerBatchSize;
               crawlerLiveScan.remaining = 0;
 
-              crawlerLastStatusMessage = `🚀 Failure threshold hit (>10 consecutive Incorrect IDs). Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId}!`;
-              console.log(`[Auto-Crawler] Failure threshold reached (>10 consecutive Incorrect IDs). Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId} to bypass dead ID block.`);
+              crawlerLastStatusMessage = `🚀 10 consecutive 404s reached. Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId}!`;
+              console.log(`[Auto-Crawler] 10 consecutive 404s reached. Auto-jumped +${jumpStep} IDs to #${crawlerCurrentId} to bypass dead ID block.`);
               break;
             }
           }
@@ -550,8 +615,9 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
         }
 
         if (data.player_id) {
-          // Valid player account found! Reset consecutive incorrect ID counter
+          // Valid player account found! Reset consecutive counters
           crawlerConsecutiveIncorrectIds = 0;
+          crawlerConsecutiveTimeouts = 0;
           validAccountsFound++;
           rawBatchCandidates.push(data);
         }
@@ -564,6 +630,7 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
       // Small delay between chunk batches
       await new Promise(resolve => setTimeout(resolve, 150));
     }
+
 
     // Refactored Step: Batch Validation Check before DB storage
     const { validTargets, rejectedCount, reasons } = validateBatchTargets(rawBatchCandidates, existingMap);
@@ -642,6 +709,10 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
       consecutiveIncorrectIds: crawlerConsecutiveIncorrectIds,
       consecutiveDeadBatches: crawlerConsecutiveDeadBatches,
       totalDeadBlocksSkipped: crawlerTotalDeadBlocksSkipped,
+      maxConsecutive404s: crawlerMaxConsecutive404s,
+      timeoutMs: crawlerTimeoutMs,
+      consecutiveTimeouts: crawlerConsecutiveTimeouts,
+      totalTimeoutsSkipped: crawlerTotalTimeoutsSkipped,
       skipRanges: crawlerSkipRanges,
     });
   }
@@ -690,6 +761,10 @@ app.get(['/api/torn/crawler-status', '/api/crawler-status', '/api/crawler/status
     consecutiveIncorrectIds: crawlerConsecutiveIncorrectIds,
     consecutiveDeadBatches: crawlerConsecutiveDeadBatches,
     totalDeadBlocksSkipped: crawlerTotalDeadBlocksSkipped,
+    maxConsecutive404s: crawlerMaxConsecutive404s,
+    timeoutMs: crawlerTimeoutMs,
+    consecutiveTimeouts: crawlerConsecutiveTimeouts,
+    totalTimeoutsSkipped: crawlerTotalTimeoutsSkipped,
     lastJumpSize: crawlerLastJumpSize,
     skipRangesCount: crawlerSkipRanges.length,
     liveScan: {
@@ -703,7 +778,7 @@ app.get(['/api/torn/crawler-status', '/api/crawler-status', '/api/crawler/status
       isSkipping: isSkippingState,
       skipReason: crawlerLiveScan.skipReason || (
         crawlerConsecutiveIncorrectIds >= 5
-          ? `High 404 frequency: ${crawlerConsecutiveIncorrectIds}/10 consecutive Incorrect IDs`
+          ? `High 404 frequency: ${crawlerConsecutiveIncorrectIds}/${crawlerMaxConsecutive404s} consecutive Incorrect IDs`
           : crawlerConsecutiveDeadBatches >= 2
           ? `Consecutive dead batches (${crawlerConsecutiveDeadBatches} empty batches). Fast-forwarding.`
           : ''
@@ -716,13 +791,20 @@ app.get(['/api/torn/crawler-status', '/api/crawler-status', '/api/crawler/status
 
 // API Endpoint to Toggle / Update Crawler Config
 app.post(['/api/torn/crawler-toggle', '/api/crawler-toggle'], (req, res) => {
-  const { enabled, apiKey, startId } = req.body;
+  const { enabled, apiKey, startId, maxConsecutive404s, timeoutMs } = req.body;
 
   if (enabled !== undefined) crawlerEnabled = Boolean(enabled);
   if (apiKey) crawlerApiKey = apiKey;
   if (startId) {
     crawlerCurrentId = parseInt(startId, 10);
     crawlerConsecutiveIncorrectIds = 0;
+    crawlerConsecutiveTimeouts = 0;
+  }
+  if (typeof maxConsecutive404s === 'number' && maxConsecutive404s > 0) {
+    crawlerMaxConsecutive404s = maxConsecutive404s;
+  }
+  if (typeof timeoutMs === 'number' && timeoutMs >= 2000) {
+    crawlerTimeoutMs = timeoutMs;
   }
 
   saveCrawlerConfig({
@@ -730,6 +812,9 @@ app.post(['/api/torn/crawler-toggle', '/api/crawler-toggle'], (req, res) => {
     apiKey: crawlerApiKey,
     currentId: crawlerCurrentId,
     consecutiveIncorrectIds: crawlerConsecutiveIncorrectIds,
+    consecutiveTimeouts: crawlerConsecutiveTimeouts,
+    maxConsecutive404s: crawlerMaxConsecutive404s,
+    timeoutMs: crawlerTimeoutMs,
   });
 
   startCrawlerLoop();
@@ -738,9 +823,36 @@ app.post(['/api/torn/crawler-toggle', '/api/crawler-toggle'], (req, res) => {
     success: true,
     enabled: crawlerEnabled,
     currentId: crawlerCurrentId,
+    maxConsecutive404s: crawlerMaxConsecutive404s,
+    timeoutMs: crawlerTimeoutMs,
     message: crawlerEnabled
       ? `Auto-Crawler started! Scanning 20 User IDs every 30s starting at ID #${crawlerCurrentId}`
       : 'Auto-Crawler paused.',
+  });
+});
+
+// API Endpoint to Update Crawler Config Settings (e.g. 404 threshold, timeout, batch size)
+app.post(['/api/torn/crawler-config', '/api/crawler-config'], (req, res) => {
+  const { maxConsecutive404s, timeoutMs, batchSize } = req.body || {};
+  if (typeof maxConsecutive404s === 'number' && maxConsecutive404s > 0) {
+    crawlerMaxConsecutive404s = maxConsecutive404s;
+  }
+  if (typeof timeoutMs === 'number' && timeoutMs >= 2000) {
+    crawlerTimeoutMs = timeoutMs;
+  }
+  if (typeof batchSize === 'number' && batchSize >= 5 && batchSize <= 50) {
+    crawlerBatchSize = batchSize;
+  }
+  saveCrawlerConfig({
+    maxConsecutive404s: crawlerMaxConsecutive404s,
+    timeoutMs: crawlerTimeoutMs,
+    batchSize: crawlerBatchSize,
+  });
+  return res.json({
+    success: true,
+    maxConsecutive404s: crawlerMaxConsecutive404s,
+    timeoutMs: crawlerTimeoutMs,
+    batchSize: crawlerBatchSize,
   });
 });
 
@@ -878,44 +990,117 @@ app.get(['/api/torn/faction/:factionId', '/api/faction/:factionId'], async (req,
   }
 });
 
-// Batch Live User ID Range Scanner: Queries multiple User IDs live from Torn API
+// Batch Live User ID Range Scanner: Queries multiple User IDs live from Torn API with 10s timeout and 10x 404 auto-skip
 app.get(['/api/torn/scan-range', '/api/scan-range'], async (req, res) => {
   try {
     const apiKey = (req.query.key as string) || (req.headers['x-torn-key'] as string);
-    const startId = parseInt((req.query.startId as string) || '180000', 10);
+    let startId = parseInt((req.query.startId as string) || '180000', 10);
     const count = Math.min(25, Math.max(5, parseInt((req.query.count as string) || '15', 10)));
 
     if (!apiKey) {
       return res.status(400).json({ error: 'Torn API Key is required' });
     }
 
+    // Pre-check skip ranges
+    const preCheck = bypassKnownSkipRanges(startId);
+    if (preCheck.jumped) {
+      startId = preCheck.nextId;
+    }
+
     const targetUsers: any[] = [];
-    const fetchPromises = [];
+    let consecutive404s = 0;
+    let timedOutCount = 0;
+    let didAutoSkip = false;
+    let skippedNextId = startId + count;
+    let skipReason = '';
 
     for (let i = 0; i < count; i++) {
+      if (didAutoSkip) break;
       const pid = startId + i;
       const cacheKey = `user_${pid}_${apiKey}`;
       const cached = getCached(cacheKey);
 
       if (cached) {
-        if (!cached.error) targetUsers.push(cached);
+        if (!cached.error && cached.player_id) {
+          consecutive404s = 0;
+          targetUsers.push(cached);
+        } else if (cached.error) {
+          consecutive404s++;
+        }
       } else {
-        fetchPromises.push(
-          fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${apiKey}`)
-            .then((r) => r.json())
-            .then((data) => {
-              if (data && !data.error && data.player_id) {
-                setCache(cacheKey, data);
-                targetUsers.push(data);
-              }
-            })
-            .catch(() => {})
-        );
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), crawlerTimeoutMs);
+        const startTs = Date.now();
+
+        try {
+          const resp = await fetch(`https://api.torn.com/user/${pid}?selections=profile,personalstats&key=${apiKey}`, {
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          const data = await resp.json();
+
+          if (data && !data.error && data.player_id) {
+            consecutive404s = 0;
+            setCache(cacheKey, data);
+            targetUsers.push(data);
+          } else if (data?.error) {
+            const errCode = data.error.code;
+            const errMsg = data.error.error || '';
+            const isInvalidId =
+              errCode === 6 ||
+              errMsg.toLowerCase().includes('incorrect id') ||
+              errMsg.toLowerCase().includes('no user found');
+
+            if (isInvalidId) {
+              consecutive404s++;
+            }
+          }
+        } catch (fetchErr: any) {
+          clearTimeout(timer);
+          const elapsed = Date.now() - startTs;
+          const isTimeout =
+            fetchErr.name === 'AbortError' ||
+            fetchErr.name === 'TimeoutError' ||
+            elapsed >= (crawlerTimeoutMs - 100) ||
+            (fetchErr.message && (fetchErr.message.includes('aborted') || fetchErr.message.includes('timeout')));
+
+          if (isTimeout) {
+            timedOutCount++;
+            console.warn(`[Batch Scan] ⏱️ 10s timeout fetching User ID #${pid}`);
+            // Trigger 10s timeout auto-skip
+            const jumpStep = 500;
+            registerSkipRange(pid, pid + jumpStep - 1, `10s timeout on ID #${pid} in live scanner`);
+            skippedNextId = pid + jumpStep;
+            const postCheck = bypassKnownSkipRanges(skippedNextId);
+            skippedNextId = postCheck.nextId;
+            didAutoSkip = true;
+            skipReason = `⏱️ 10-second timeout reached fetching ID #${pid}. Auto-jumped +${jumpStep} IDs to #${skippedNextId}`;
+            break;
+          }
+        }
+
+        // Trigger 10x 404 auto-skip
+        if (consecutive404s >= crawlerMaxConsecutive404s) {
+          const jumpStep = 500;
+          registerSkipRange(startId, pid + jumpStep - 1, `10 consecutive 404s in live scanner`);
+          skippedNextId = pid + jumpStep;
+          const postCheck = bypassKnownSkipRanges(skippedNextId);
+          skippedNextId = postCheck.nextId;
+          didAutoSkip = true;
+          skipReason = `🚨 10 consecutive 404s ('Incorrect ID') reached. Auto-jumped +${jumpStep} IDs to #${skippedNextId}`;
+          break;
+        }
       }
     }
 
-    await Promise.all(fetchPromises);
-    return res.json({ users: targetUsers, nextStartId: startId + count });
+    return res.json({
+      users: targetUsers,
+      nextStartId: skippedNextId,
+      skipped: didAutoSkip,
+      skipReason,
+      timedOut: timedOutCount > 0,
+      jumpStep: didAutoSkip ? 500 : 0,
+    });
   } catch (err: any) {
     console.error('Batch Scan Error:', err);
     return res.status(500).json({ error: 'Failed batch scan' });

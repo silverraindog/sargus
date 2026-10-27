@@ -42,6 +42,7 @@ export default function App() {
 
   const [nextScanStartId, setNextScanStartId] = useState<number>(185000);
   const [isScanningLive, setIsScanningLive] = useState<boolean>(false);
+  const [liveScanNotice, setLiveScanNotice] = useState<string | null>(null);
 
   // Auto Refresh state (default 30s, minimum 15s when enabled to respect Cloud Run rate limits)
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(() => {
@@ -259,7 +260,7 @@ export default function App() {
     loadProfileAndTargets(newKey);
   };
 
-  // Scan live User ID blocks directly from Torn API
+  // Scan live User ID blocks directly from Torn API (auto-skips +500 on 10x 404s or 10s timeout)
   const handleScanMoreLive = async () => {
     if (!apiKey) {
       setIsKeyModalOpen(true);
@@ -267,37 +268,52 @@ export default function App() {
     }
 
     setIsScanningLive(true);
+    setLiveScanNotice(null);
     try {
       const result = await safeFetchJson<any>(`/api/torn/scan-range?startId=${nextScanStartId}&count=20&key=${encodeURIComponent(apiKey)}`);
-      if (result.ok && result.data?.users && Array.isArray(result.data.users)) {
-        const foundTargets: InactiveTarget[] = result.data.users.map((u: any) => {
-          const daysOffline = calculateDaysOffline(u.last_action || { relative: '0 days' });
-          const country = extractTargetCountry(u);
-          const rawProfile: Partial<PlayerProfile> = {
-            player_id: u.player_id,
-            name: u.name || `User_${u.player_id}`,
-            level: u.level || 1,
-            rank: u.rank || 'Civilian',
-            age: u.age || 100,
-            last_action: u.last_action || { status: 'Offline', relative: `${daysOffline} days ago`, timestamp: 0 },
-            status: u.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
-            personalstats: u.personalstats,
-          };
+      if (result.ok && result.data) {
+        if (result.data.users && Array.isArray(result.data.users)) {
+          const foundTargets: InactiveTarget[] = result.data.users.map((u: any) => {
+            const daysOffline = calculateDaysOffline(u.last_action || { relative: '0 days' });
+            const country = extractTargetCountry(u);
+            const rawProfile: Partial<PlayerProfile> = {
+              player_id: u.player_id,
+              name: u.name || `User_${u.player_id}`,
+              level: u.level || 1,
+              rank: u.rank || 'Civilian',
+              age: u.age || 100,
+              last_action: u.last_action || { status: 'Offline', relative: `${daysOffline} days ago`, timestamp: 0 },
+              status: u.status || { description: 'Okay', details: '', state: 'Okay', until: 0 },
+              personalstats: u.personalstats,
+            };
 
-          const ffScouter = calculateFFScouterEstimate(rawProfile, playerStats || { strength: 15000, defense: 15000, speed: 15000, dexterity: 15000, total: 60000 });
+            const ffScouter = calculateFFScouterEstimate(rawProfile, playerStats || { strength: 15000, defense: 15000, speed: 15000, dexterity: 15000, total: 60000 });
 
-          return {
-            ...rawProfile,
-            daysOffline,
-            ffScouter,
-            country,
-            attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${u.player_id}`,
-            profileUrl: `https://www.torn.com/profiles.php?XID=${u.player_id}`,
-          } as InactiveTarget;
-        });
+            return {
+              ...rawProfile,
+              daysOffline,
+              ffScouter,
+              country,
+              attackUrl: `https://www.torn.com/page.php?sid=attack&user2ID=${u.player_id}`,
+              profileUrl: `https://www.torn.com/profiles.php?XID=${u.player_id}`,
+            } as InactiveTarget;
+          });
 
-        handleAddScannedTargets(foundTargets);
-        setNextScanStartId((prev) => prev + 20);
+          if (foundTargets.length > 0) {
+            handleAddScannedTargets(foundTargets);
+          }
+        }
+
+        if (result.data.nextStartId) {
+          setNextScanStartId(result.data.nextStartId);
+        } else {
+          setNextScanStartId((prev) => prev + 20);
+        }
+
+        if (result.data.skipped) {
+          setLiveScanNotice(result.data.skipReason || `Auto-skipped +500 IDs to #${result.data.nextStartId} (10 404s or 10s timeout hit)`);
+          setTimeout(() => setLiveScanNotice(null), 8000);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch live API targets:', err);
@@ -535,7 +551,25 @@ export default function App() {
           {/* Tab 1: Main Target Scouting View */}
           {activeTab === 'targets' && (
             <>
+              {liveScanNotice && (
+                <div className="mb-4 bg-gradient-to-r from-amber-950/90 via-rose-950/80 to-amber-950/90 border border-amber-500/50 rounded-xl p-3 text-amber-200 text-xs font-mono flex items-center justify-between gap-3 shadow-lg shadow-amber-950/40 animate-pulse">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold uppercase text-[10px]">
+                      ⚡ Live Scanner Auto-Jump
+                    </span>
+                    <span>{liveScanNotice}</span>
+                  </div>
+                  <button
+                    onClick={() => setLiveScanNotice(null)}
+                    className="text-amber-400 hover:text-white text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-700"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
               <TargetFilterBar
+
                 filters={filters}
                 onFilterChange={(updated) => setFilters((prev) => ({ ...prev, ...updated }))}
                 onResetFilters={() =>

@@ -106,8 +106,13 @@ export const FactionScannerModal: React.FC<FactionScannerModalProps> = ({
       });
 
       onAddTargets(foundTargets);
-      setSuccessMsg(`Successfully queried User IDs ${start} - ${start + 15} live from Torn API! Loaded ${foundTargets.length} targets.`);
-      setStartUserIdInput((start + 15).toString());
+      const nextId = data.nextStartId || (start + 15);
+      setStartUserIdInput(nextId.toString());
+      if (data.skipped) {
+        setSuccessMsg(`Query complete: ${data.skipReason || `Auto-skipped +500 IDs past dead block to #${nextId}`}. Loaded ${foundTargets.length} targets.`);
+      } else {
+        setSuccessMsg(`Successfully queried User IDs ${start} - ${start + 15} live from Torn API! Loaded ${foundTargets.length} targets.`);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to scan user ID block');
     } finally {
