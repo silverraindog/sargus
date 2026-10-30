@@ -455,10 +455,12 @@ export default function App() {
         if (filters.difficultyFilter !== 'ALL' && target.ffScouter.difficulty !== filters.difficultyFilter) {
           return false;
         }
-        if (filters.hiddenStatuses.includes(target.status.state as any)) {
+        const targetState = (target.status.state || 'Okay').toLowerCase();
+        if (filters.hiddenStatuses.map(s => s.toLowerCase()).includes(targetState)) {
+          console.log('Filtering out target due to hidden status:', target.name, targetState, filters.hiddenStatuses);
           return false;
         }
-        if (filters.statusFilter === 'OKAY_ONLY' && target.status.state !== 'Okay') {
+        if (filters.statusFilter === 'OKAY_ONLY' && targetState !== 'okay') {
           return false;
         }
         if (filters.searchQuery.trim()) {
