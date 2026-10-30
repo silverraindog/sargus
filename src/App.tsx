@@ -457,7 +457,6 @@ export default function App() {
         }
         const targetState = (target.status.state || 'Okay').toLowerCase();
         if (filters.hiddenStatuses.map(s => s.toLowerCase()).includes(targetState)) {
-          console.log('Filtering out target due to hidden status:', target.name, targetState, filters.hiddenStatuses);
           return false;
         }
         if (filters.statusFilter === 'OKAY_ONLY' && targetState !== 'okay') {

@@ -429,11 +429,7 @@ function validateBatchTargets(
       continue;
     }
 
-    // 2. Deduplication check against persistent DB
-    if (existingMap.has(pid)) {
-      reasons.already_in_db++;
-      continue;
-    }
+    // 2. Deduplication check against persistent DB removed to allow updates
 
     // 3. Deduplication check within current batch
     if (seenInBatch.has(pid)) {
@@ -741,12 +737,21 @@ async function executeCrawlerCycle(overrideApiKey?: string) {
     const { validTargets, rejectedCount, reasons } = validateBatchTargets(rawBatchCandidates, existingMap);
 
     if (validTargets.length > 0) {
+      let addedCount = 0;
+      let updatedCount = 0;
       for (const t of validTargets) {
-        currentDb.push(t);
-        existingMap.set(t.player_id, true);
+        const existingIndex = currentDb.findIndex(existing => existing.player_id === t.player_id);
+        if (existingIndex !== -1) {
+          currentDb[existingIndex] = t; // Update
+          updatedCount++;
+        } else {
+          currentDb.push(t); // Add new
+          existingMap.set(t.player_id, true);
+          addedCount++;
+        }
       }
       writeDbTargets(currentDb);
-      console.log(`[Auto-Crawler] [Batch Validation Passed] Saved ${validTargets.length} verified inactive targets. Total in DB: ${currentDb.length}`);
+      console.log(`[Auto-Crawler] [Batch Validation Passed] Saved ${addedCount} new and updated ${updatedCount} existing inactive targets. Total in DB: ${currentDb.length}`);
     }
 
     // Dynamic Range Jump & Dead Block Skipping Logic
